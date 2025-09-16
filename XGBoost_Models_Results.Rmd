@@ -1,0 +1,438 @@
+---
+title: "Reproducible Modelling"
+author: "Hamed Sharif"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 4
+---
+
+This document shows the results of trained model for the gauged catchments test and training sets. 
+
+```{r get packages and data, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE,
+                      warning = FALSE, dpi = 300,
+                      fig.align = 'center')
+options(knitr.kable.NA = '-')
+library(data.table)
+library(tidyverse)
+library(sf)
+library(rnaturalearth)
+library(xgboost)
+library(caret)
+library(ggnewscale)
+library(ggspatial)
+library(patchwork)
+library(ggpubr)
+library(ggrepel)
+library(ggh4x)
+library(ggpmisc)
+library(knitr)
+library(cvms)
+library(countrycode)
+
+# Test and Training IDs for dormant and growing trained models
+load("data/Training_IDs.RData")
+dormant_model <- xgb.load("dormant_model")
+growing_model <- xgb.load("growing_model")
+
+# Gauged catchments metadata and attributes
+df_atts_gauged <- fread("data/Gauged_Catchments_Metadata_and_Attributes.csv") %>%
+  mutate(
+    dormant_gauged_class = ordered(
+      dormant_gauged_class,
+      levels = c("simple", "intermediate", "complex")
+    ),
+    growing_gauged_class = ordered(
+      growing_gauged_class,
+      levels = c("simple", "intermediate", "complex")
+    ),
+    dormant_predicted_class = ordered(
+      dormant_predicted_class,
+      levels = c("simple", "intermediate", "complex")
+    ),
+    growing_predicted_class = ordered(
+      growing_predicted_class,
+      levels = c("simple", "intermediate", "complex")
+    )
+  )
+xgboost_gauged_att_etc <- fread("data/XGB_ETC_Atts.csv")
+xgboost_gauged_atts <- df_atts_gauged %>%
+  pivot_longer(cols = c(`RW5-dormant`:`RW1-growing`),
+               names_to = c("var", "period"), values_to = "val",
+               names_sep = "-") %>%
+  pivot_wider(names_from = var, values_from = val) %>%
+  left_join(xgboost_gauged_att_etc %>%
+              rename(`Source ID` = id),
+            by = c("period", "Source ID")) %>%
+  dplyr::select(c(period, `Source ID`, AI, RW1, RW2.5, RW5, Area, `Async Index`,
+                  `Slope/AI`, CTI, CTIW, `(P-AET) x Slope`, 
+                  `Median DepthToBedrock`, `Median TWI`, 
+                  `First Geo Dominant Class`, `Second Geo Dominant Class`,
+                  `Frequency Not Level`, `G Shape Elevation`,
+                  `G Shape Slope`, `G Shape TWI`, `G Shape TRI`, 
+                  `G Scale Elevation`, `G Scale Slope`, `G Scale TWI`,
+                  `G Scale TRI`))
+
+# Regions for gauged catchments
+na <- df_atts_gauged %>%
+  dplyr::filter(country %in% c("CA", "US")) %>% pull(`Source ID`)
+
+sa <- df_atts_gauged %>% 
+  mutate(
+    continent = countrycode(country, origin = "iso2c",
+                            destination = "region")
+  ) %>%
+  dplyr::filter(continent == "Latin America & Caribbean") %>% pull(`Source ID`)
+
+eu <- df_atts_gauged %>% 
+  mutate(
+    continent = countrycode(country, origin = "iso2c",
+                            destination = "continent")
+  ) %>%
+  dplyr::filter(continent == "Europe") %>% pull(`Source ID`)
+
+af <- df_atts_gauged %>% 
+  mutate(
+    continent = countrycode(country, origin = "iso2c",
+                            destination = "continent")
+  ) %>%
+  dplyr::filter(continent == "Africa") %>% pull(`Source ID`)
+
+oc <- df_atts_gauged %>% 
+  mutate(
+    continent = countrycode(country, origin = "iso2c",
+                            destination = "continent")
+  ) %>%
+  dplyr::filter(continent == "Oceania") %>% pull(`Source ID`)
+
+regions_ids <- data.frame(
+  region = c(
+    rep("NA", length(na)), rep("SA", length(sa)), rep("EU", length(eu)),
+    rep("AF", length(af)), rep("OC", length(oc))
+  ),
+  id = c(na, sa, eu, af, oc)
+)
+```
+
+
+```{r handy functions}
+# function to get the performance metrics for both training set and test set
+# as well as all samples
+calculate_class_metrics <- function(conf_matrix, class_index) {
+  true_positives <- conf_matrix[class_index, class_index]
+  false_positives <- sum(conf_matrix[, class_index]) - true_positives
+  false_negatives <- sum(conf_matrix[class_index, ]) - true_positives
+  true_negatives <- sum(conf_matrix) - 
+    (true_positives + false_positives + false_negatives)
+  
+  precision <- true_positives / (true_positives + false_positives)
+  recall <- true_positives / (true_positives + false_negatives)
+  specificity <- true_negatives / (true_negatives + false_positives)
+  f1_score <- 2 * (precision * recall) / (precision + recall)
+  
+  list(precision = precision, recall = recall,
+       specificity = specificity, f1_score = f1_score)
+}
+
+eval_metrics_exe <- function(model, dmatrix, obs_labels) {
+  # Predict on the test set
+  pred <- predict(model, newdata = dmatrix)
+  pred_labels <- max.col(matrix(pred,
+                                ncol = 3,
+                                byrow = TRUE)) - 1
+  
+  conf_mat <- confusionMatrix(ordered(pred_labels, levels = c(0, 1, 2)),
+                              ordered(as.numeric(obs_labels) - 1, 
+                                      levels = c(0, 1, 2)))
+  # calculate simple performances
+  performances_simple <- calculate_class_metrics(conf_mat$table, 1)
+  # calculate intermediate performances
+  performances_intermediate <- calculate_class_metrics(conf_mat$table, 2)
+  # calculate complex performance
+  performances_complex <- calculate_class_metrics(conf_mat$table, 3)
+  
+  # evaluating complex vs non-complex
+  testLabels_adj <- ifelse(obs_labels %in% c("simple", "intermediate"),
+                           "non-complex", "complex")
+  testLabels_adj <- ordered(testLabels_adj,
+                            levels = c("non-complex", "complex"))
+  pred_labels_adj <- ifelse(pred_labels %in% c(0, 1), 0, 1)
+  conf_mat_adj <- confusionMatrix(ordered(pred_labels_adj, levels = c(0, 1)),
+                                  ordered(as.numeric(testLabels_adj) - 1,
+                                          levels = c(0, 1)))
+  performances_noncomplex <- calculate_class_metrics(conf_mat_adj$table, 1) 
+  performances_complex_adj <- calculate_class_metrics(conf_mat_adj$table, 2) 
+  
+  return(
+    data.frame(
+      behavioral_class = c("Simple", "Intermediate", "Complex", "All Non-Complex",
+                           "All Complex"),
+      num_samples = c(
+        summary(obs_labels), summary(testLabels_adj)
+      ),
+      precision = c(performances_simple$precision,
+                    performances_intermediate$precision,
+                    performances_complex$precision,
+                    performances_noncomplex$precision,
+                    performances_complex_adj$precision),
+      specificity = c(performances_simple$specificity,
+                      performances_intermediate$specificity,
+                      performances_complex$specificity,
+                      performances_noncomplex$specificity,
+                      performances_complex_adj$specificity)
+    )
+  )
+}
+```
+
+
+# 1. Dormant Season
+
+## 1.1. Regional Performance Tables
+
+```{r}
+xgdata_regional <- xgboost_gauged_atts %>%
+  dplyr::filter(period == "dormant") %>%
+  left_join(df_atts_gauged %>%
+              dplyr::select(c(`Source ID`, dormant_gauged_class)),
+            by = "Source ID") %>%
+  dplyr::select(-c(period)) %>%
+  rename(Class = dormant_gauged_class)
+
+result_regions_df <- data.frame()
+  for (n in c("NA", "SA", "EU", "AF", "OC")) {
+    ids <- regions_ids$id[which(regions_ids$region == n)]
+    dtest_iter <- xgb.DMatrix(
+      data = as.matrix(
+        xgdata_regional[which(xgdata_regional$`Source ID` %in% ids), ] %>%
+          dplyr::select(-c(`Source ID`, Class))
+      ), 
+      label = as.numeric(
+        xgdata_regional[which(xgdata_regional$`Source ID` %in% ids), ] %>%
+          pull(Class)
+      ) - 1
+    )
+    labels_iter <- xgdata_regional[which(xgdata_regional$`Source ID` %in% ids), ] %>%
+      pull(Class)
+    result_regions_df <- rbind(
+      result_regions_df,
+      eval_metrics_exe(dormant_model, dtest_iter, labels_iter) %>%
+        mutate(Set = n) %>%
+      relocate(Set)
+    )
+  }
+
+result_regions_df %>%
+  rename(Region = Set) %>%
+    mutate(
+      Region = case_when(
+        Region == "NA" ~ "Canada and the US",
+        Region == "SA" ~ "Latin America & Caribbean",
+        Region == "EU" ~ "Europe",
+        Region == "AF" ~ "Africa",
+        Region == "OC" ~ "Oceania"
+      )
+    ) %>%
+  kable(
+    col.names = c("Region", "Class", "Number of Catchments",
+                  "Precision", "Specificity"),
+    digits = 2,
+    align = "lccc"
+  )
+```
+
+
+---
+
+## 1.2. Training and Test set performance
+
+80% have been used for training, and 20% for test set.
+
+Number of test set catchments: `r nrow(df_atts_gauged) - length(training_ids_dormant)`
+
+Number of training set catchments: `r length(training_ids_dormant)`
+
+```{r}
+# Preparing Training Set
+trainData <- xgboost_gauged_atts %>%
+  dplyr::filter(period == "dormant") %>%
+  dplyr::filter(`Source ID` %in% training_ids_dormant) %>%
+  left_join(df_atts_gauged %>%
+              dplyr::select(c(`Source ID`, dormant_gauged_class)),
+            by = "Source ID") %>%
+  dplyr::select(-c(`Source ID`, period)) %>%
+  rename(Class = dormant_gauged_class)
+trainFeatures <- trainData %>% dplyr::select(-Class)
+trainLabels <- trainData$Class
+dtrain <- xgb.DMatrix(data = as.matrix(trainFeatures), 
+                      label = as.numeric(trainLabels) - 1)
+
+# Preparing Test Set
+testData <- xgboost_gauged_atts %>%
+  dplyr::filter(period == "dormant") %>%
+  dplyr::filter(!`Source ID` %in% training_ids_dormant) %>%
+  left_join(df_atts_gauged %>%
+              dplyr::select(c(`Source ID`, dormant_gauged_class)),
+            by = "Source ID") %>%
+  dplyr::select(-c(`Source ID`, period)) %>%
+  rename(Class = dormant_gauged_class)
+testFeatures <- testData %>% dplyr::select(-Class)
+testLabels <- testData$Class
+dtest <- xgb.DMatrix(data = as.matrix(testFeatures), 
+                     label = as.numeric(testLabels) - 1)
+
+# Get performance metrics: specificity and precision for each class
+bind_rows(
+  eval_metrics_exe(dormant_model, dtrain, trainLabels) %>%
+    mutate(Set = "Training") %>%
+    relocate(Set),
+  eval_metrics_exe(dormant_model, dtest, testLabels) %>%
+    mutate(Set = "Test") %>%
+    relocate(Set)
+) %>%
+  mutate(
+    behavioral_class = ordered(
+      behavioral_class,
+      levels = c("Simple", "Intermediate", "Complex", "All Non-Complex",
+                 "All Complex")
+    )
+  ) %>%
+  kable(
+    col.names = c("Set", "Class", "Number of Catchments",
+                  "Precision", "Specificity"),
+    digits = 2,
+    align = "lccc"
+  )
+```
+
+---
+
+
+# 2. Growing Season
+
+## 2.1. Regional Performance Tables
+
+```{r}
+xgdata_regional <- xgboost_gauged_atts %>%
+  dplyr::filter(period == "growing") %>%
+  left_join(df_atts_gauged %>%
+              dplyr::select(c(`Source ID`, growing_gauged_class)),
+            by = "Source ID") %>%
+  dplyr::select(-c(period)) %>%
+  rename(Class = growing_gauged_class) %>%
+  drop_na(Class)
+
+result_regions_df <- data.frame()
+  for (n in c("NA", "SA", "EU", "AF", "OC")) {
+    ids <- regions_ids$id[which(regions_ids$region == n)]
+    dtest_iter <- xgb.DMatrix(
+      data = as.matrix(
+        xgdata_regional[which(xgdata_regional$`Source ID` %in% ids), ] %>%
+          dplyr::select(-c(`Source ID`, Class))
+      ), 
+      label = as.numeric(
+        xgdata_regional[which(xgdata_regional$`Source ID` %in% ids), ] %>%
+          pull(Class)
+      ) - 1
+    )
+    labels_iter <- xgdata_regional[which(xgdata_regional$`Source ID` %in% ids), ] %>%
+      pull(Class)
+    result_regions_df <- rbind(
+      result_regions_df,
+      eval_metrics_exe(growing_model, dtest_iter, labels_iter) %>%
+        mutate(Set = n) %>%
+      relocate(Set)
+    )
+  }
+
+result_regions_df %>%
+  rename(Region = Set) %>%
+    mutate(
+      Region = case_when(
+        Region == "NA" ~ "Canada and the US",
+        Region == "SA" ~ "Latin America & Caribbean",
+        Region == "EU" ~ "Europe",
+        Region == "AF" ~ "Africa",
+        Region == "OC" ~ "Oceania"
+      )
+    ) %>%
+  kable(
+    col.names = c("Region", "Class", "Number of Catchments",
+                  "Precision", "Specificity"),
+    digits = 2,
+    align = "lccc"
+  )
+```
+
+---
+
+## 2.2. Training and Test set performance
+
+80% have been used for training, and 20% for test set.
+
+Number of test set catchments: `r nrow(df_atts_gauged %>% dplyr::filter(!is.na(growing_gauged_class))) - length(training_ids_growing)`
+
+Number of training set catchments: `r length(training_ids_growing)`
+
+```{r}
+# Preparing Training Set
+trainData <- xgboost_gauged_atts %>%
+  dplyr::filter(period == "growing") %>%
+  dplyr::filter(`Source ID` %in% training_ids_growing) %>%
+  left_join(df_atts_gauged %>%
+              dplyr::select(c(`Source ID`, growing_gauged_class)),
+            by = "Source ID") %>%
+  dplyr::select(-c(`Source ID`, period)) %>%
+  rename(Class = growing_gauged_class) %>%
+  drop_na(Class)
+trainFeatures <- trainData %>% dplyr::select(-Class)
+trainLabels <- trainData$Class
+dtrain <- xgb.DMatrix(data = as.matrix(trainFeatures), 
+                      label = as.numeric(trainLabels) - 1)
+
+# Preparing Test Set
+testData <- xgboost_gauged_atts %>%
+  dplyr::filter(period == "growing") %>%
+  dplyr::filter(!`Source ID` %in% training_ids_growing) %>%
+  left_join(df_atts_gauged %>%
+              dplyr::select(c(`Source ID`, growing_gauged_class)),
+            by = "Source ID") %>%
+  dplyr::select(-c(`Source ID`, period)) %>%
+  rename(Class = growing_gauged_class) %>%
+  drop_na(Class)
+testFeatures <- testData %>% dplyr::select(-Class)
+testLabels <- testData$Class
+dtest <- xgb.DMatrix(data = as.matrix(testFeatures), 
+                     label = as.numeric(testLabels) - 1)
+
+# Get performance metrics: specificity and precision for each class
+bind_rows(
+  eval_metrics_exe(growing_model, dtrain, trainLabels) %>%
+    mutate(Set = "Training") %>%
+    relocate(Set),
+  eval_metrics_exe(growing_model, dtest, testLabels) %>%
+    mutate(Set = "Test") %>%
+    relocate(Set)
+) %>%
+  mutate(
+    behavioral_class = ordered(
+      behavioral_class,
+      levels = c("Simple", "Intermediate", "Complex", "All Non-Complex",
+                 "All Complex")
+    )
+  ) %>%
+  kable(
+    col.names = c("Set", "Class", "Number of Catchments",
+                  "Precision", "Specificity"),
+    digits = 2,
+    align = "lccc"
+  )
+```
+
+---
+
+
+
