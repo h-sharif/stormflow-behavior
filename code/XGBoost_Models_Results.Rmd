@@ -17,6 +17,7 @@ knitr::opts_chunk$set(echo = FALSE, message = FALSE,
                       fig.align = 'center')
 options(knitr.kable.NA = '-')
 library(data.table)
+library(here)
 library(tidyverse)
 library(xgboost)
 library(caret)
@@ -24,12 +25,13 @@ library(knitr)
 library(countrycode)
 
 # Test and Training IDs for dormant and growing trained models
-load("data/Training_IDs.RData")
-dormant_model <- xgb.load("dormant_model")
-growing_model <- xgb.load("growing_model")
+load(here("data", "Training_IDs.RData"))
+dormant_model <- xgb.load(here("code", "dormant_model"))
+growing_model <- xgb.load(here("code", "growing_model"))
 
 # Gauged catchments metadata and attributes
-df_atts_gauged <- fread("data/Gauged_Catchments_Metadata_and_Attributes.csv") %>%
+df_atts_gauged <- fread(here("data", 
+                             "Gauged_Catchments_Metadata_and_Attributes.csv")) %>%
   mutate(
     dormant_gauged_class = ordered(
       dormant_gauged_class,
@@ -48,7 +50,7 @@ df_atts_gauged <- fread("data/Gauged_Catchments_Metadata_and_Attributes.csv") %>
       levels = c("simple", "intermediate", "complex")
     )
   )
-xgboost_gauged_att_etc <- fread("data/XGB_ETC_Atts.csv")
+xgboost_gauged_att_etc <- fread(here("data", "XGB_ETC_Atts.csv"))
 xgboost_gauged_atts <- df_atts_gauged %>%
   pivot_longer(cols = c(`RW5-dormant`:`RW1-growing`),
                names_to = c("var", "period"), values_to = "val",
