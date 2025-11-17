@@ -19,3 +19,5 @@ Using R version 4.4.1 on an Apple M3 with 8 GB memory and Sonoma 14.6.1 macOS, i
 * caret 7.0-1
 * knitr 1.50
 * countrycode 1.6.1
+
+This repository can be cloned and executed with a local installation of R and the required packages noted above.
