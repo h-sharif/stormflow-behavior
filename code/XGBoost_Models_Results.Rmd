@@ -51,7 +51,9 @@ df_atts_gauged <- fread(here("data",
       levels = c("simple", "intermediate", "complex")
     )
   )
+
 xgboost_gauged_att_etc <- fread(here("data", "XGB_ETC_Atts.csv"))
+
 xgboost_gauged_atts <- df_atts_gauged %>%
   pivot_longer(cols = c(`RW1-dormant`:`RW5-growing`),
                names_to = c("var", "period"), values_to = "val",
