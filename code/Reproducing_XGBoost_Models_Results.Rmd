@@ -13,13 +13,11 @@ Following results can be reproduced with this document:
 
   1. Spatial maps of gauged behavioral classes in dormant and growing seasons,
   
-  2. Predicted behavioral classes for gauged catchments in dormant and growing seasons,
+  2. Performance metrics of trained XGBoost models in dormant and growing seasons over test and training sets of gauged catchments,
   
-  3. Performance metrics of trained XGBoost models in dormant and growing seasons over test and training sets of gauged catchments,
+  3. Regional performance metrics of trained XGBoost model in dormant and growing seasons, and
   
-  4. Regional performance metrics of trained XGBoost model in dormant and growing seasons, and
-  
-  5. Predicted behavioral classes for ungauged catchments in dormant and growing seasons.
+  4. Predicted behavioral classes for ungauged catchments in dormant and growing seasons.
 
 It should be noted that only the results with the best rained XGBoost model in dormant and growing seasons were reproduced here similar to the main text of the manuscript.
 
@@ -35,6 +33,12 @@ library(xgboost)
 library(caret)
 library(knitr)
 library(countrycode)
+library(maptiles)
+library(tidyterra)
+library(sf)
+library(scales)
+library(ggthemes)
+library(rnaturalearth)
 
 # Test and Training IDs for dormant and growing trained models -----------------
 load(here("data", "Training_IDs.RData"))
@@ -138,7 +142,8 @@ df_atts_ungauged <- fread(here("data",
     growing_predicted_class = ordered(
       growing_predicted_class,
       levels = c("simple", "intermediate", "complex")
-    )
+    ),
+    country = ifelse(country == "", "NA", country) # Namibia was read as #N/A
   )
 
 # XGBoost features for ungauged catchments -------------------------------------
@@ -234,15 +239,82 @@ eval_metrics_exe <- function(model, dmatrix, obs_labels) {
 
 # 1. Gauged Catchments
 
+```{r}
+gauged_sf <- df_atts_gauged %>%
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326) %>%
+  st_transform(3857)
+```
+
 ## 1.1. Dormant Season
 
 ### 1.1.1. Gauged Behavioral Classes
 
+```{r, fig.width=7, fig.height=3.5, fig.cap="Gauged Catchments Behavioral Classes in Dormant Season"}
+bg_basemap <- get_tiles(
+  x = st_bbox(c(xmin = -180, xmax = 180, ymax = 65, ymin = -65), crs = st_crs(4326)), 
+  provider = "Esri.WorldTopoMap", 
+  zoom = 1, 
+  crop = TRUE
+)
 
-### 1.1.2. Predicted Behavioral Classes
+ggplot() +
+  geom_spatraster_rgb(data = bg_basemap, alpha = 0.5) +
+  geom_sf(data = gauged_sf %>%
+            arrange(desc(dormant_gauged_class == "complex"), 
+                    desc(dormant_gauged_class == "intermediate")),
+          aes(fill = dormant_gauged_class), size = 0.7, 
+          stroke = 0.1, shape = 21) +
+  scale_fill_manual(
+    values = c(
+      "simple" = alpha("#00459B", 0.7),
+      "intermediate" = alpha("#78A455", 0.7),
+      "complex" = alpha("#C06844", 0.7)
+    )
+  ) +
+  labs(fill = " Gauged Behavioral Class in Dormant (-)") +
+  theme_map() +
+  theme(
+    legend.position = "top", legend.direction = "horizontal",
+    legend.title.position = "top"
+  )
+```
 
 
-### 1.1.3. Training and Test Sets Performance Metrics
+---
+
+```{r, fig.width=6, fig.height=5, fig.cap="Gauged Catchments Behavioral Classes Distribution in Dormant Season"}
+df_atts_gauged %>%
+  dplyr::select(c(dormant_gauged_class, dormant_predicted_class)) %>%
+  pivot_longer(cols = c(1, 2), names_to = "type", values_to = "class") %>%
+  mutate(type = ifelse(type == "dormant_gauged_class", "Gauged", "Predicted")) %>%
+  count(type, class) %>%
+  group_by(type) %>%
+  mutate(pct = n / sum(n)) %>%
+  ungroup() %>%
+  ggplot(aes(x = class, y = pct, fill = type)) +
+  geom_col(position = position_dodge(width = 0.9)) +
+  geom_text(
+    aes(label = n),
+    position = position_dodge(width = 0.9),
+    vjust = -0.5,
+    size = 3.5
+  ) +
+  scale_y_continuous(labels = percent_format(), expand = expansion(mult = c(0, 0.1)),
+                     limits = c(0, 1), breaks = seq(0, 1, 0.2),
+                     minor_breaks = seq(0, 1, 0.1)) +
+  labs(
+    x = "Behavioral Class in Dormant",
+    y = "Percentage (%)",
+    subtitle = "Total Number of Catchments with Gauged Behavioral Class in Dormant: 4306",
+    fill = ""
+  ) +
+  theme_bw() +
+  theme(legend.position = "bottom", legend.direction = "horizontal")
+```
+
+---
+
+### 1.1.2. Training and Test Sets Performance Metrics
 
 80% have been used for training, and 20% for test set.
 
@@ -306,7 +378,7 @@ bind_rows(
 ---
 
 
-### 1.1.4. Regional Performance Metrics
+### 1.1.3. Regional Performance Metrics
 
 ```{r}
 xgdata_regional <- xgboost_gauged_atts %>%
@@ -366,11 +438,68 @@ result_regions_df %>%
 
 ### 1.2.1. Gauged Behavioral Classes
 
+```{r, fig.width=7, fig.height=3.5, fig.cap="Gauged Catchments Behavioral Classes in Growing Season"}
+ggplot() +
+  geom_spatraster_rgb(data = bg_basemap, alpha = 0.5) +
+  geom_sf(data = gauged_sf %>%
+            drop_na(growing_gauged_class) %>%
+            arrange(desc(growing_gauged_class == "complex"), 
+                    desc(growing_gauged_class == "intermediate")),
+          aes(fill = growing_gauged_class), size = 0.7, 
+          stroke = 0.1, shape = 21) +
+  scale_fill_manual(
+    values = c(
+      "simple" = alpha("#00459B", 0.7),
+      "intermediate" = alpha("#78A455", 0.7),
+      "complex" = alpha("#C06844", 0.7)
+    )
+  ) +
+  labs(fill = " Gauged Behavioral Class in Growing (-)") +
+  theme_map() +
+  theme(
+    legend.position = "top", legend.direction = "horizontal",
+    legend.title.position = "top"
+  )
+```
 
-### 1.2.2. Predicted Behavioral Classes
+
+---
+
+```{r, fig.width=6, fig.height=5, fig.cap="Gauged Catchments Behavioral Classes Distribution in Growing Season"}
+df_atts_gauged %>%
+  drop_na(growing_gauged_class) %>%
+  dplyr::select(c(growing_gauged_class, growing_predicted_class)) %>%
+  pivot_longer(cols = c(1, 2), names_to = "type", values_to = "class") %>%
+  mutate(type = ifelse(type == "growing_gauged_class", "Gauged", "Predicted")) %>%
+  count(type, class) %>%
+  group_by(type) %>%
+  mutate(pct = n / sum(n)) %>%
+  ungroup() %>%
+  ggplot(aes(x = class, y = pct, fill = type)) +
+  geom_col(position = position_dodge(width = 0.9)) +
+  geom_text(
+    aes(label = n),
+    position = position_dodge(width = 0.9),
+    vjust = -0.5,
+    size = 3.5
+  ) +
+  scale_y_continuous(labels = percent_format(), expand = expansion(mult = c(0, 0.1)),
+                     limits = c(0, 1), breaks = seq(0, 1, 0.2),
+                     minor_breaks = seq(0, 1, 0.1)) +
+  labs(
+    x = "Behavioral Class in Growing",
+    y = "Percentage (%)",
+    subtitle = "Total Number of Catchments with Gauged Behavioral Class in Growing: 4205",
+    fill = ""
+  ) +
+  theme_bw() +
+  theme(legend.position = "bottom", legend.direction = "horizontal")
+```
 
 
-### 1.2.3. Training and Test Sets Performance Metrics
+---
+
+### 1.2.2. Training and Test Sets Performance Metrics
 
 80% have been used for training, and 20% for test set.
 
@@ -436,7 +565,7 @@ bind_rows(
 ---
 
 
-### 1.2.4. Regional Performance Metrics
+### 1.2.3. Regional Performance Metrics
 
 ```{r}
 xgdata_regional <- xgboost_gauged_atts %>%
@@ -490,6 +619,7 @@ result_regions_df %>%
   )
 ```
 
+
 ---
 
 
@@ -499,36 +629,633 @@ Here, static map of predicted behavioral classes for ungauged catchments are rep
 
 ## 2.1. Predicted Behavioral Classes in Dormant Seasons
 
-### 2.1.1. Global
+```{r, fig.width=7, fig.height=3.5, fig.cap="Distribution of Ungauged Catchments Predicted Behavioral Classes in Dormant Season"}
+df_atts_ungauged %>%
+  count(dormant_predicted_class) %>%
+  mutate(pct = n / sum(n)) %>%
+  ggplot(aes(x = dormant_predicted_class, y = pct)) +
+  geom_col() +
+  geom_text(
+    aes(label = n),
+    vjust = -0.5,
+    size = 3.5
+  ) +
+  scale_y_continuous(labels = percent_format(), expand = expansion(mult = c(0, 0.1)),
+                     limits = c(0, 1), breaks = seq(0, 1, 0.2),
+                     minor_breaks = seq(0, 1, 0.1)) +
+  labs(
+    x = "Predicted Behavioral Class in Dormant",
+    y = "Percentage (%)",
+    subtitle = "Total Number of Ungauged Catchments in Dormant Season: 75,585",
+    fill = ""
+  ) +
+  theme_bw() +
+  theme(legend.position = "bottom", legend.direction = "horizontal")
+```
+
+---
+
+```{r, fig.width=7, fig.height=3.5, fig.cap="Distribution of Ungauged Catchments Area for each Predicted Behavioral Class in Dormant Season"}
+df_atts_ungauged %>%
+  group_by(dormant_predicted_class) %>%
+  summarise(total_area = sum(Area) / 1e6,
+            .groups = "drop") %>%
+  mutate(area_pct = total_area / sum(total_area)) %>%
+  ggplot(aes(x = dormant_predicted_class, y = area_pct)) +
+  geom_col() +
+  geom_text(
+    aes(label = paste(round(total_area), "sq.km")),
+    vjust = -0.5,
+    size = 3.5
+  ) +
+  scale_y_continuous(labels = percent_format(), expand = expansion(mult = c(0, 0.1)),
+                     limits = c(0, 1), breaks = seq(0, 1, 0.2),
+                     minor_breaks = seq(0, 1, 0.1)) +
+  labs(
+    x = "Predicted Behavioral Class in Dormant",
+    y = "Percentage of Total Processed Area (%)",
+    subtitle = expression("Total Area of All Ungauged Catchments: 139 x "*10^6~"("*km^2*")"),
+    fill = ""
+  ) +
+  theme_bw() +
+  theme(legend.position = "bottom", legend.direction = "horizontal")
+```
 
 
-### 2.1.2. Canada (BC) and Salish Sea Region
+---
+
+### 2.1.1. Canada (BC) and Salish Sea Region
+
+```{r, fig.width=5, fig.height=6.5, fig.cap="Predicted Behavioral Classes for Ungauged Catchments in Canada (BC) and Salish Sea Region in Dormant Season"}
+sf_obj <- df_atts_ungauged %>%
+  dplyr::filter(`Polygon Source` == "BCUB") %>%
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326) %>%
+  st_transform(3857)
+
+bg_basemap <- get_tiles(
+  x = st_bbox(sf_obj %>% st_buffer(100000)), 
+  provider = "Esri.WorldTopoMap", 
+  zoom = 5, 
+  crop = TRUE
+)
+
+ggplot() +
+  geom_spatraster_rgb(data = bg_basemap, alpha = 0.7) +
+  geom_sf(data = sf_obj %>%
+            arrange(desc(dormant_predicted_class == "complex"), 
+                    desc(dormant_predicted_class == "intermediate")),
+          aes(color = dormant_predicted_class), shape = 16, size = 0.3) +
+  scale_color_manual(
+    values = c(
+      "simple" = alpha("#00459B", 0.2),
+      "intermediate" = alpha("#78A455", 0.2),
+      "complex" = alpha("#C06844", 0.2)
+    )
+  ) +
+  labs(color = "Predicted Behavioral Class in Dormant (-)",
+       subtitle = "Ungauged Catchments in Canada (BC) and Salish Sea Region") +
+  theme_map() +
+  theme(
+    legend.position = "bottom", legend.direction = "horizontal",
+    legend.title.position = "top"
+  ) +
+  guides(color = guide_legend(override.aes = list(size = 1.5, alpha = 1)))
+```
 
 
-### 2.1.3. Europe
+---
+
+```{r}
+sf_obj %>%
+  st_drop_geometry() %>%
+  group_by(dormant_predicted_class) %>%
+  summarise(
+    n = n(),
+    area = round(sum(Area)/1e6, digits = 3),
+    .groups ="drop"
+  ) %>%
+  kable(
+    col.names = c("Predicted Behavioral Class", "Number of Catchments", "$Area\\,(10^6\\,km^2)$"),
+    caption = "Canada (BC) and Salish Sea Region in Dormant Season",
+    align = "lcc"
+  )
+```
 
 
-### 2.1.4. Latin America
+---
 
 
-### 2.1.5. Australia
+### 2.1.2. Europe
 
+```{r, fig.width=8, fig.height=6.5, fig.cap="Predicted Behavioral Classes for Ungauged Catchments in Europe in Dormant Season"}
+sf_obj <- df_atts_ungauged %>%
+  mutate(continent = countrycode(country, origin = "iso2c", destination = "continent"))  %>%
+  dplyr::filter(continent == "Europe") %>%
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326)
+
+sf_bbox <- st_bbox(sf_obj)
+
+europe_borders <- ne_countries(scale = "medium", continent = "Europe", returnclass = "sf")
+
+europe_labels <- europe_borders %>%
+  # Filter to map area so text doesn't crowd out the edges
+  filter(admin %in% c("United Kingdom", "France", "Germany", "Spain", "Italy", 
+                      "Austria", "Belgium", "Netherlands", "Switzerland", "Denmark")) %>%
+  mutate(iso_a2 = ifelse(iso_a2 == "-99", "FR", iso_a2)) # fixing France code
+
+ggplot() +
+  geom_sf(data = europe_borders, fill = alpha("grey80", 0.2), color = "grey30",
+          linewidth = 0.1) +
+  geom_sf(data = sf_obj %>%
+            arrange(desc(dormant_predicted_class == "complex"), 
+                    desc(dormant_predicted_class == "intermediate")),
+          aes(fill = dormant_predicted_class), shape = 21, size = 0.7, stroke = 0.03) +
+  geom_sf_text(data = europe_labels, aes(label = iso_a2), 
+               color = "grey40", fontface = "bold", size = 2, alpha = 0.8) +
+  scale_fill_manual(
+    values = c(
+      "simple" = alpha("#00459B", 0.8),
+      "intermediate" = alpha("#78A455", 0.8),
+      "complex" = alpha("#C06844", 0.8)
+    )
+  ) +
+  labs(fill = "Predicted Behavioral Class in Dormant (-)",
+       subtitle = "Ungauged Catchments in Europe") +
+  theme_map() +
+  theme(
+    legend.position = "bottom", legend.direction = "horizontal",
+    legend.title.position = "top"
+  ) +
+  guides(fill = guide_legend(override.aes = list(size = 1.5, alpha = 1))) +
+  coord_sf(xlim = c(sf_bbox["xmin"], sf_bbox["xmax"]), 
+           ylim = c(sf_bbox["ymin"], sf_bbox["ymax"]), 
+           expand = TRUE)
+```
+
+
+---
+
+```{r}
+sf_obj %>%
+  st_drop_geometry() %>%
+  group_by(dormant_predicted_class) %>%
+  summarise(
+    n = n(),
+    area = round(sum(Area)/1e6, digits = 3),
+    .groups ="drop"
+  ) %>%
+  kable(
+    col.names = c("Predicted Behavioral Class", "Number of Catchments", "$Area\\,(10^6\\,km^2)$"),
+    caption = "Europe in Dormant Season",
+    align = "lcc"
+  )
+```
+
+
+---
+
+
+### 2.1.3. Latin America
+
+```{r, fig.width=5, fig.height=6, fig.cap="Predicted Behavioral Classes for Ungauged Catchments in Latin America in Dormant Season"}
+sf_obj <- df_atts_ungauged %>%
+  mutate(continent = countrycode(country, origin = "iso2c", destination = "continent"))  %>%
+  dplyr::filter(continent == "Americas", !country %in% c("CA", "US")) %>%
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326)
+
+sf_bbox <- st_bbox(sf_obj)
+
+sa_borders <- ne_countries(scale = "medium", returnclass = "sf")
+
+sa_labels <- sa_borders %>%
+  filter(admin %in% c("Mexico", "Brazil", "Argentina", "Colombia", "Peru", 
+                      "Venezuela", "Chile", "Ecuador", "Bolivia", "Paraguay", 
+                      "Uruguay", "Guyana", "Suriname", "Panama", "Costa Rica"))
+
+ggplot() +
+  geom_sf(data = sa_borders, fill = alpha("grey80", 0.2), color = "grey30",
+          linewidth = 0.1) +
+  geom_sf(data = sf_obj %>%
+            arrange(desc(dormant_predicted_class == "complex"), 
+                    desc(dormant_predicted_class == "intermediate")),
+          aes(fill = dormant_predicted_class), shape = 21, size = 0.6, stroke = 0.03) +
+  geom_sf_text(data = sa_labels, aes(label = iso_a2), 
+               color = "grey40", fontface = "bold", size = 2, alpha = 0.8) +
+  scale_fill_manual(
+    values = c(
+      "simple" = alpha("#00459B", 0.8),
+      "intermediate" = alpha("#78A455", 0.8),
+      "complex" = alpha("#C06844", 0.8)
+    )
+  ) +
+  labs(fill = "Predicted Behavioral Class in Dormant (-)",
+       subtitle = "Ungauged Catchments in Latin America") +
+  theme_map() +
+  theme(
+    legend.position = "bottom", legend.direction = "horizontal",
+    legend.title.position = "top"
+  ) +
+  guides(fill = guide_legend(override.aes = list(size = 1.5, alpha = 1))) +
+  coord_sf(xlim = c(sf_bbox["xmin"], sf_bbox["xmax"]), 
+           ylim = c(sf_bbox["ymin"], sf_bbox["ymax"]), 
+           expand = TRUE)
+```
+
+---
+
+```{r}
+sf_obj %>%
+  st_drop_geometry() %>%
+  group_by(dormant_predicted_class) %>%
+  summarise(
+    n = n(),
+    area = round(sum(Area)/1e6, digits = 3),
+    .groups ="drop"
+  ) %>%
+  kable(
+    col.names = c("Predicted Behavioral Class", "Number of Catchments", "$Area\\,(10^6\\,km^2)$"),
+    caption = "Latin America in Dormant Season",
+    align = "lcc"
+  )
+```
+
+
+---
+
+### 2.1.4. Australia
+
+```{r, fig.width=7, fig.height=5, fig.cap="Predicted Behavioral Classes for Ungauged Catchments in Austrila and New Zealand in Dormant Season"}
+nz_borders <- ne_countries(scale = "medium", country = "New Zealand", returnclass = "sf")
+aus_states <- ne_states(country = "Australia", returnclass = "sf")
+
+sf_obj <- df_atts_ungauged %>%
+  mutate(continent = countrycode(country, origin = "iso2c", destination = "continent"))  %>%
+  dplyr::filter(continent == "Oceania") %>%
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326)
+
+sf_bbox <- st_bbox(sf_obj)
+
+ggplot() +
+  geom_sf(data = nz_borders, fill = alpha("grey80", 0.2), color = "grey30", linewidth = 0.1) +
+  geom_sf(data = aus_states, fill = alpha("grey80", 0.2), color = "grey30", linewidth = 0.1) +
+  geom_sf(data = sf_obj %>%
+            arrange(desc(dormant_predicted_class == "complex"), 
+                    desc(dormant_predicted_class == "intermediate")),
+          aes(fill = dormant_predicted_class), shape = 21, size = 0.8, stroke = 0.03) +
+  scale_fill_manual(
+    values = c(
+      "simple" = alpha("#00459B", 0.8),
+      "intermediate" = alpha("#78A455", 0.8),
+      "complex" = alpha("#C06844", 0.8)
+    )
+  ) +
+  labs(fill = "Predicted Behavioral Class in Dormant (-)",
+       subtitle = "Ungauged Catchments in Oceania") +
+  theme_map() +
+  theme(
+    legend.position = "bottom", legend.direction = "horizontal",
+    legend.title.position = "top"
+  ) +
+  guides(fill = guide_legend(override.aes = list(size = 1.5, alpha = 1))) +
+  coord_sf(xlim = c(sf_bbox["xmin"], sf_bbox["xmax"]), 
+           ylim = c(sf_bbox["ymin"], sf_bbox["ymax"]), 
+           expand = TRUE)
+```
+
+
+---
+
+```{r}
+sf_obj %>%
+  st_drop_geometry() %>%
+  group_by(dormant_predicted_class) %>%
+  summarise(
+    n = n(),
+    area = round(sum(Area)/1e6, digits = 3),
+    .groups ="drop"
+  ) %>%
+  kable(
+    col.names = c("Predicted Behavioral Class", "Number of Catchments", "$Area\\,(10^6\\,km^2)$"),
+    caption = "Oceania in Dormant Season",
+    align = "lcc"
+  )
+```
+
+---
 
 ## 2.2. Predicted Behavioral Classes in Growing Seasons
 
-### 2.2.1. Global
+```{r, fig.width=7, fig.height=3.5, fig.cap="Distribution of Ungauged Catchments Predicted Behavioral Classes in Growing Season"}
+df_atts_ungauged %>%
+  drop_na(growing_predicted_class) %>%  # growing dormancy info were not available for two catchments in AUS
+  count(growing_predicted_class) %>%
+  mutate(pct = n / sum(n)) %>%
+  ggplot(aes(x = growing_predicted_class, y = pct)) +
+  geom_col() +
+  geom_text(
+    aes(label = n),
+    vjust = -0.5,
+    size = 3.5
+  ) +
+  scale_y_continuous(labels = percent_format(), expand = expansion(mult = c(0, 0.1)),
+                     limits = c(0, 1), breaks = seq(0, 1, 0.2),
+                     minor_breaks = seq(0, 1, 0.1)) +
+  labs(
+    x = "Predicted Behavioral Class in Growing",
+    y = "Percentage (%)",
+    subtitle = "Total Number of Ungauged Catchments in Growing Season: 75,583",
+    fill = ""
+  ) +
+  theme_bw() +
+  theme(legend.position = "bottom", legend.direction = "horizontal")
+```
+
+---
+
+```{r, fig.width=7, fig.height=3.5, fig.cap="Distribution of Ungauged Catchments Area for each Predicted Behavioral Class in Growing Season"}
+df_atts_ungauged %>%
+  drop_na(growing_predicted_class) %>%  # growing dormancy info were not available for two catchments in AUS
+  group_by(growing_predicted_class) %>%
+  summarise(total_area = sum(Area) / 1e6,
+            .groups = "drop") %>%
+  mutate(area_pct = total_area / sum(total_area)) %>%
+  ggplot(aes(x = growing_predicted_class, y = area_pct)) +
+  geom_col() +
+  geom_text(
+    aes(label = paste(round(total_area), "sq.km")),
+    vjust = -0.5,
+    size = 3.5
+  ) +
+  scale_y_continuous(labels = percent_format(), expand = expansion(mult = c(0, 0.1)),
+                     limits = c(0, 1), breaks = seq(0, 1, 0.2),
+                     minor_breaks = seq(0, 1, 0.1)) +
+  labs(
+    x = "Predicted Behavioral Class in Growing",
+    y = "Percentage of Total Processed Area (%)",
+    subtitle = expression("Total Area of All Ungauged Catchments: 139 x "*10^6~"("*km^2*")"),
+    fill = ""
+  ) +
+  theme_bw() +
+  theme(legend.position = "bottom", legend.direction = "horizontal")
+```
+
+---
+
+### 2.2.1. Canada (BC) and Salish Sea Region
+
+```{r, fig.width=5, fig.height=6.5, fig.cap="Predicted Behavioral Classes for Ungauged Catchments in Canada (BC) and Salish Sea Region in Growing Season"}
+sf_obj <- df_atts_ungauged %>%
+  dplyr::filter(`Polygon Source` == "BCUB") %>%
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326) %>%
+  st_transform(3857)
+
+bg_basemap <- get_tiles(
+  x = st_bbox(sf_obj %>% st_buffer(100000)), 
+  provider = "Esri.WorldTopoMap", 
+  zoom = 5, 
+  crop = TRUE
+)
+
+ggplot() +
+  geom_spatraster_rgb(data = bg_basemap, alpha = 0.7) +
+  geom_sf(data = sf_obj %>%
+            arrange(desc(growing_predicted_class == "complex"), 
+                    desc(growing_predicted_class == "intermediate")),
+          aes(color = growing_predicted_class), shape = 16, size = 0.3) +
+  scale_color_manual(
+    values = c(
+      "simple" = alpha("#00459B", 0.2),
+      "intermediate" = alpha("#78A455", 0.2),
+      "complex" = alpha("#C06844", 0.2)
+    )
+  ) +
+  labs(color = "Predicted Behavioral Class in Growing (-)",
+       subtitle = "Ungauged Catchments in Canada (BC) and Salish Sea Region") +
+  theme_map() +
+  theme(
+    legend.position = "bottom", legend.direction = "horizontal",
+    legend.title.position = "top"
+  ) +
+  guides(color = guide_legend(override.aes = list(size = 1.5, alpha = 1)))
+```
 
 
-### 2.2.2. Canada (BC) and Salish Sea Region
+---
+
+```{r}
+sf_obj %>%
+  st_drop_geometry() %>%
+  group_by(growing_predicted_class) %>%
+  summarise(
+    n = n(),
+    area = round(sum(Area)/1e6, digits = 3),
+    .groups ="drop"
+  ) %>%
+  kable(
+    col.names = c("Predicted Behavioral Class", "Number of Catchments", "$Area\\,(10^6\\,km^2)$"),
+    caption = "Canada (BC) and Salish Sea Region in Growing Season",
+    align = "lcc"
+  )
+```
+
+---
+
+### 2.2.2. Europe
+
+```{r, fig.width=8, fig.height=6.5, fig.cap="Predicted Behavioral Classes for Ungauged Catchments in Europe in Growing Season"}
+sf_obj <- df_atts_ungauged %>%
+  mutate(continent = countrycode(country, origin = "iso2c", destination = "continent"))  %>%
+  dplyr::filter(continent == "Europe") %>%
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326)
+
+sf_bbox <- st_bbox(sf_obj)
+
+europe_borders <- ne_countries(scale = "medium", continent = "Europe", returnclass = "sf")
+
+europe_labels <- europe_borders %>%
+  # Filter to map area so text doesn't crowd out the edges
+  filter(admin %in% c("United Kingdom", "France", "Germany", "Spain", "Italy", 
+                      "Austria", "Belgium", "Netherlands", "Switzerland", "Denmark")) %>%
+  mutate(iso_a2 = ifelse(iso_a2 == "-99", "FR", iso_a2)) # fixing France code
+
+ggplot() +
+  geom_sf(data = europe_borders, fill = alpha("grey80", 0.2), color = "grey30",
+          linewidth = 0.1) +
+  geom_sf(data = sf_obj %>%
+            arrange(desc(growing_predicted_class == "complex"), 
+                    desc(growing_predicted_class == "intermediate")),
+          aes(fill = growing_predicted_class), shape = 21, size = 0.7, stroke = 0.03) +
+  geom_sf_text(data = europe_labels, aes(label = iso_a2), 
+               color = "grey40", fontface = "bold", size = 2, alpha = 0.8) +
+  scale_fill_manual(
+    values = c(
+      "simple" = alpha("#00459B", 0.8),
+      "intermediate" = alpha("#78A455", 0.8),
+      "complex" = alpha("#C06844", 0.8)
+    )
+  ) +
+  labs(fill = "Predicted Behavioral Class in Growing (-)",
+       subtitle = "Ungauged Catchments in Europe") +
+  theme_map() +
+  theme(
+    legend.position = "bottom", legend.direction = "horizontal",
+    legend.title.position = "top"
+  ) +
+  guides(fill = guide_legend(override.aes = list(size = 1.5, alpha = 1))) +
+  coord_sf(xlim = c(sf_bbox["xmin"], sf_bbox["xmax"]), 
+           ylim = c(sf_bbox["ymin"], sf_bbox["ymax"]), 
+           expand = TRUE)
+```
+
+---
 
 
-### 2.2.3. Europe
+```{r}
+sf_obj %>%
+  st_drop_geometry() %>%
+  group_by(growing_predicted_class) %>%
+  summarise(
+    n = n(),
+    area = round(sum(Area)/1e6, digits = 3),
+    .groups ="drop"
+  ) %>%
+  kable(
+    col.names = c("Predicted Behavioral Class", "Number of Catchments", "$Area\\,(10^6\\,km^2)$"),
+    caption = "Europe in Growing Season",
+    align = "lcc"
+  )
+```
 
 
-### 2.2.4. Latin America
+---
+
+### 2.2.3. Latin America
+
+```{r, fig.width=5, fig.height=6, fig.cap="Predicted Behavioral Classes for Ungauged Catchments in Latin America in Growing Season"}
+sf_obj <- df_atts_ungauged %>%
+  mutate(continent = countrycode(country, origin = "iso2c", destination = "continent"))  %>%
+  dplyr::filter(continent == "Americas", !country %in% c("CA", "US")) %>%
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326)
+
+sf_bbox <- st_bbox(sf_obj)
+
+sa_borders <- ne_countries(scale = "medium", returnclass = "sf")
+
+sa_labels <- sa_borders %>%
+  filter(admin %in% c("Mexico", "Brazil", "Argentina", "Colombia", "Peru", 
+                      "Venezuela", "Chile", "Ecuador", "Bolivia", "Paraguay", 
+                      "Uruguay", "Guyana", "Suriname", "Panama", "Costa Rica"))
+
+ggplot() +
+  geom_sf(data = sa_borders, fill = alpha("grey80", 0.2), color = "grey30",
+          linewidth = 0.1) +
+  geom_sf(data = sf_obj %>%
+            arrange(desc(growing_predicted_class == "complex"), 
+                    desc(growing_predicted_class == "intermediate")),
+          aes(fill = growing_predicted_class), shape = 21, size = 0.6, stroke = 0.03) +
+  geom_sf_text(data = sa_labels, aes(label = iso_a2), 
+               color = "grey40", fontface = "bold", size = 2, alpha = 0.8) +
+  scale_fill_manual(
+    values = c(
+      "simple" = alpha("#00459B", 0.8),
+      "intermediate" = alpha("#78A455", 0.8),
+      "complex" = alpha("#C06844", 0.8)
+    )
+  ) +
+  labs(fill = "Predicted Behavioral Class in Growing (-)",
+       subtitle = "Ungauged Catchments in Latin America") +
+  theme_map() +
+  theme(
+    legend.position = "bottom", legend.direction = "horizontal",
+    legend.title.position = "top"
+  ) +
+  guides(fill = guide_legend(override.aes = list(size = 1.5, alpha = 1))) +
+  coord_sf(xlim = c(sf_bbox["xmin"], sf_bbox["xmax"]), 
+           ylim = c(sf_bbox["ymin"], sf_bbox["ymax"]), 
+           expand = TRUE)
+```
+
+---
 
 
-### 2.2.5. Australia
+```{r}
+sf_obj %>%
+  st_drop_geometry() %>%
+  group_by(growing_predicted_class) %>%
+  summarise(
+    n = n(),
+    area = round(sum(Area)/1e6, digits = 3),
+    .groups ="drop"
+  ) %>%
+  kable(
+    col.names = c("Predicted Behavioral Class", "Number of Catchments", "$Area\\,(10^6\\,km^2)$"),
+    caption = "Latin America in Growing Season",
+    align = "lcc"
+  )
+```
 
 
+---
 
+### 2.2.4. Australia
+
+```{r, fig.width=7, fig.height=5, fig.cap="Predicted Behavioral Classes for Ungauged Catchments in Austrila and New Zealand in Growing Season"}
+nz_borders <- ne_countries(scale = "medium", country = "New Zealand", returnclass = "sf")
+aus_states <- ne_states(country = "Australia", returnclass = "sf")
+
+sf_obj <- df_atts_ungauged %>%
+  drop_na(growing_predicted_class) %>% # growing dormancy info were not available for two catchments in AUS
+  mutate(continent = countrycode(country, origin = "iso2c", destination = "continent"))  %>%
+  dplyr::filter(continent == "Oceania") %>%
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326)
+
+sf_bbox <- st_bbox(sf_obj)
+
+ggplot() +
+  geom_sf(data = nz_borders, fill = alpha("grey80", 0.2), color = "grey30", linewidth = 0.1) +
+  geom_sf(data = aus_states, fill = alpha("grey80", 0.2), color = "grey30", linewidth = 0.1) +
+  geom_sf(data = sf_obj %>%
+            arrange(desc(growing_predicted_class == "complex"), 
+                    desc(growing_predicted_class == "intermediate")),
+          aes(fill = growing_predicted_class), shape = 21, size = 0.8, stroke = 0.03) +
+  scale_fill_manual(
+    values = c(
+      "simple" = alpha("#00459B", 0.8),
+      "intermediate" = alpha("#78A455", 0.8),
+      "complex" = alpha("#C06844", 0.8)
+    )
+  ) +
+  labs(fill = "Predicted Behavioral Class in Growing (-)",
+       subtitle = "Ungauged Catchments in Oceania") +
+  theme_map() +
+  theme(
+    legend.position = "bottom", legend.direction = "horizontal",
+    legend.title.position = "top"
+  ) +
+  guides(fill = guide_legend(override.aes = list(size = 1.5, alpha = 1))) +
+  coord_sf(xlim = c(sf_bbox["xmin"], sf_bbox["xmax"]), 
+           ylim = c(sf_bbox["ymin"], sf_bbox["ymax"]), 
+           expand = TRUE)
+```
+
+---
+
+
+```{r}
+sf_obj %>%
+  st_drop_geometry() %>%
+  group_by(growing_predicted_class) %>%
+  summarise(
+    n = n(),
+    area = round(sum(Area)/1e6, digits = 3),
+    .groups ="drop"
+  ) %>%
+  kable(
+    col.names = c("Predicted Behavioral Class", "Number of Catchments", "$Area\\,(10^6\\,km^2)$"),
+    caption = "Oceania in Growing Season",
+    align = "lcc"
+  )
+```
+
+
+---
