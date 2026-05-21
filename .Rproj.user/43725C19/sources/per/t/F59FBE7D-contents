@@ -1,0 +1,376 @@
+# Were executed on March 30 on hsharif
+library(data.table)
+library(tidyverse)
+library(sf)
+setwd("C:/dev/archive/")
+theme_set(theme_bw())
+
+# let's check the data to be the same
+# be noted than GCIN is the revised version in the submitted data
+gauged_atts <- fread("REV Results/All_Gauged_Catchments_Features_Behavioral_Classes_with_New_Additions.csv")
+gauged_meta <- fread("REV Results/All_Gauged_Catchments_Metadata.csv") %>%
+  mutate(Source.ID = ifelse(Source.ID == "", `Source ID`, Source.ID))
+
+sum(duplicated(gauged_meta$Source.ID))
+
+rev_gauged_atts_meta <- fread("revised_submission/Gauged_Catchments_Metadata_and_Attributes.csv")
+prev_submission <- fread("Gauged_Catchments_Metadata_and_Attributes_Previous_Submission.csv")
+
+sum(duplicated(rev_gauged_atts_meta$`Source ID`))
+sum(duplicated(prev_submission$`Source ID`))
+
+# This is the issue of having discrepancy in column names of Source ID & Source.ID
+rev_gauged_atts_meta %>%
+  dplyr::filter(duplicated(`Source ID`))
+
+gcin_link <- rev_gauged_atts_meta %>%
+  dplyr::filter(!Catchment_Boundary_Flagged) %>%
+  dplyr::select(c(GCIN, `Source ID`, longitude, latitude, country, dormant_gauged_class, growing_gauged_class,
+                  dormant_predicted_class, growing_predicted_class, `RW1-dormant`:`Second Geo Dominant Class`
+                  )) %>%
+  rename(GCIN_new = GCIN,
+         Source.ID_dup = `Source ID`) %>%
+  left_join(
+    gauged_meta %>%
+      dplyr::select(c(GCIN, Source.ID, longitude, latitude, country)),
+    by = c("country", "longitude", "latitude")
+  ) %>%
+  dplyr::select(-Source.ID_dup) %>%
+  rename(`behavioral_class-dormant` = dormant_gauged_class,
+         `behavioral_class-growing` = growing_gauged_class,
+         `predicted_behavioral_class-dormant` = dormant_predicted_class,
+         `predicted_behavioral_class-growing` = growing_predicted_class) %>%
+  pivot_longer(
+    cols = c(`behavioral_class-dormant`, `behavioral_class-growing`,
+             `predicted_behavioral_class-dormant`, `predicted_behavioral_class-growing`,
+             `RW1-dormant`, `RW1-growing`,
+             `RW2.5-dormant`, `RW2.5-growing`,
+             `RW5-dormant`, `RW5-growing`),
+    names_to = c(".value", "period"),
+    names_sep = "-"
+  )
+
+summary(gcin_link)
+sum(gcin_link$Source.ID == "")
+
+gcin_linked_df <- gcin_link %>%
+  dplyr::select(c(GCIN_new, GCIN, Source.ID, country, period,
+                  RW1, RW2.5, RW5, AI:predicted_behavioral_class))
+
+summary(gcin_linked_df)
+gcin_linked_df$GCIN_new %>% unique() %>% length()
+gcin_linked_df$GCIN %>% unique() %>% length()
+
+# check attributes
+check_atts <- gcin_linked_df %>%
+  dplyr::select(-c(Source.ID, country, GCIN_new, predicted_behavioral_class,
+                   behavioral_class)) %>%
+  pivot_longer(cols = -c(GCIN, period),
+               values_to = "att_val_new", names_to = "att") %>%
+  left_join(
+    gauged_atts %>%
+      dplyr::select(-c(Version, behavioral_class)) %>%
+      pivot_longer(cols = -c(GCIN, period),
+                   values_to = "att_val_old", names_to = "att"),
+    by = c("GCIN", "att", "period")
+  )
+
+plt_dormant <- check_atts %>%
+  dplyr::filter(period == "dormant") %>%
+  ggplot(aes(x = att_val_old, y = att_val_new)) +
+  geom_abline(slope = 1, intercept = 0) +
+  geom_point(color = "blue2", size = 1.4) +
+  facet_wrap(vars(att), scales = "free")
+
+summary(check_atts)
+
+ggsave("dormant_check.pdf", plt_dormant, width = 12, height = 12)
+
+
+plt_growing <- check_atts %>%
+  dplyr::filter(period == "growing") %>%
+  ggplot(aes(x = att_val_old, y = att_val_new)) +
+  geom_abline(slope = 1, intercept = 0) +
+  geom_point(color = "khaki", size = 1.4) +
+  facet_wrap(vars(att), scales = "free")
+
+ggsave("growing_check.pdf", plt_growing, width = 12, height = 12)
+
+# All attributes are consistent
+
+# Let's check classes
+check_class <- gcin_linked_df %>%
+  dplyr::select(c(GCIN, period, behavioral_class)) %>%
+  rename(new_class = behavioral_class) %>%
+  left_join(
+    gauged_atts %>%
+      dplyr::select(c(GCIN, period, behavioral_class)) %>%
+      rename(old_class = behavioral_class),
+    by = c("GCIN", "period")
+  ) %>%
+  mutate(
+    new_class = ordered(new_class),
+    old_class = ordered(old_class),
+  )
+
+plt_class_check <- check_class %>%
+  drop_na(new_class, old_class) %>%
+  ggplot(aes(x = old_class, y = new_class)) +
+  geom_point() +
+  facet_wrap(vars(period))
+
+ggsave("growing_check.pdf", plt_class_check, width = 8, height = 4)
+
+# Behavioral classes are consistent as well
+
+# Let's feed the XGB_ETC ones
+xgb_etc <- gauged_atts %>%
+  dplyr::select(c(period, GCIN, `Slope/AI`, CTI, CTIW)) %>%
+  left_join(
+    gcin_linked_df %>%
+      dplyr::select(c(GCIN, period, GCIN_new)),
+    by = c("GCIN", "period")
+  ) %>%
+  dplyr::select(-GCIN) %>% # there was an issue here
+  rename(GCIN = GCIN_new) %>%
+  relocate(GCIN)
+
+summary(xgb_etc)
+length(unique(xgb_etc$GCIN))
+fwrite(xgb_etc, "New_XGB_ETC_Atts.csv")
+
+# revise gauged catchments metadata and attributes
+rev_gauged_atts_meta_adj <- rev_gauged_atts_meta %>%
+  rename(GCIN_New = GCIN,
+         Source.ID_dup  = `Source ID`) %>%
+  left_join(
+    gauged_meta %>%
+      dplyr::select(c(GCIN, Source.ID, longitude, latitude, country)),
+    by = c("country", "longitude", "latitude")
+  ) %>%
+  left_join(prev_submission %>%
+              dplyr::select(c(GCIN, `Source ID`)), # GCIN is the same for GCIN <= 4245 and these source IDs were missing
+            by = c("GCIN")) %>%
+  mutate(
+    Source.ID_dup = ifelse(
+      Source.ID_dup == "",  ifelse(
+        Source.ID != "", Source.ID, `Source ID`
+      ),
+      Source.ID_dup
+    )
+  )
+
+sum(rev_gauged_atts_meta_adj$Source.ID_dup %>% duplicated())
+
+
+rev_gauged_atts_meta_adj <- rev_gauged_atts_meta_adj %>%
+  dplyr::select(-c(GCIN, Source.ID, `Source ID`)) %>%
+  rename(`Source ID` = Source.ID_dup, GCIN = GCIN_New)
+
+summary(rev_gauged_atts_meta_adj)
+
+fwrite(rev_gauged_atts_meta_adj,
+       "revised_submission/Revised_Gauged_Catchments_Metadata_and_Attributes.csv")
+
+rev_ungauged_atts_meta <- fread("revised_submission/Ungauged_Catchments_Metadata_and_Attributes.csv")
+duplicated(rev_ungauged_atts_meta$`Source ID`) %>% sum()
+# it's ok with ungauged
+
+# check boundary polygons
+gauged_bdry <- st_read("revised_submission/Gauged_Catchments_Boundaries.gpkg")
+gauged_bdry$Source.ID %>% duplicated() %>% sum()
+
+# double check
+rev_gauged_atts_meta_adj %>%
+  dplyr::select(c(GCIN, `Source ID`)) %>%
+  left_join(gauged_bdry %>%
+              dplyr::select(c(GCIN, Source.ID)), by = "GCIN") %>%
+  mutate(check = `Source.ID` == Source.ID) %>%
+  pull(check) %>% summary()
+
+ungauged_bdry <- st_read("revised_submission/Ungauged_Catchments_Boundaries.gpkg")
+ungauged_bdry$Source.ID %>% duplicated() %>% sum()
+
+
+# revise GCIN for training_ids.csv
+training_ids <- fread("new_models_repodc/training_ids.csv")
+
+training_ids_adj <- training_ids %>%
+  rename(GCIN = training_ids) %>%
+  left_join(
+    gcin_link %>%
+      dplyr::filter(period == "dormant") %>%
+      dplyr::select(c(GCIN_new, GCIN)),
+    by = "GCIN"
+  )
+
+summary(training_ids_adj)
+
+training_ids_adj %>%
+  dplyr::select(c(Fraction, Period, Trial, GCIN_new)) %>%
+  rename(GCIN = GCIN_new) %>%
+  fwrite("updated_training_ids.csv")
+
+training_ids_dormant <-  training_ids_adj %>%
+  dplyr::filter(Period == "dormant", Fraction == 0.8, Trial == 82) %>%
+  pull(GCIN_new)
+
+training_ids_growing <-  training_ids_adj %>%
+  dplyr::filter(Period == "growing", Fraction == 0.8, Trial == 95) %>%
+  pull(GCIN_new)
+
+save(training_ids_dormant, training_ids_growing,
+     file = "stormflow-behavior/data/New_Training_IDs.RData")
+
+
+# check region_ids
+region_ids_old <- fread("REV Results/region_ids_original_GCIN.csv")
+region_ids <- region_ids_old %>%
+  left_join(
+    gcin_link %>%
+      dplyr::filter(period == "dormant") %>%
+      dplyr::select(c(GCIN_new, GCIN)),
+    by = "GCIN"
+  )
+
+df_atts_gauged <- fread("revised_submission/Revised_Gauged_Catchments_Metadata_and_Attributes.csv")  %>%
+  dplyr::filter(!Catchment_Boundary_Flagged) %>%
+  mutate(
+    dormant_gauged_class = ordered(
+      dormant_gauged_class,
+      levels = c("simple", "intermediate", "complex")
+    ),
+    growing_gauged_class = ordered(
+      growing_gauged_class,
+      levels = c("simple", "intermediate", "complex")
+    ),
+    dormant_predicted_class = ordered(
+      dormant_predicted_class,
+      levels = c("simple", "intermediate", "complex")
+    ),
+    growing_predicted_class = ordered(
+      growing_predicted_class,
+      levels = c("simple", "intermediate", "complex")
+    )
+  )
+
+na <- df_atts_gauged %>%
+  dplyr::filter(country %in% c("CA", "US")) %>% pull(GCIN)
+
+sa <- df_atts_gauged %>%
+  mutate(
+    country = ifelse(country == "AUS", "AU", country),
+    continent = countrycode(country, origin = "iso2c",
+                            destination = "region")
+  ) %>%
+  dplyr::filter(continent == "Latin America & Caribbean") %>% pull(GCIN)
+
+eu <- df_atts_gauged %>%
+  mutate(
+    country = ifelse(country == "AUS", "AU", country),
+    continent = countrycode(country, origin = "iso2c",
+                            destination = "continent")
+  ) %>%
+  dplyr::filter(continent == "Europe") %>% pull(GCIN)
+
+af <- df_atts_gauged %>%
+  mutate(
+    country = ifelse(country == "AUS", "AU", country),
+    continent = countrycode(country, origin = "iso2c",
+                            destination = "continent")
+  ) %>%
+  dplyr::filter(continent == "Africa") %>% pull(GCIN)
+
+oc <- df_atts_gauged %>%
+  mutate(
+    country = ifelse(country == "AUS", "AU", country),
+    continent = countrycode(country, origin = "iso2c",
+                            destination = "continent")
+  ) %>%
+  dplyr::filter(continent == "Oceania") %>% pull(GCIN)
+
+regions_ids_new <- data.frame(
+  region = c(
+    rep("NA", length(na)), rep("SA", length(sa)), rep("EU", length(eu)),
+    rep("AF", length(af)), rep("OC", length(oc))
+  ),
+  GCIN_new = c(na, sa, eu, af, oc)
+)
+
+
+na_old <- region_ids$GCIN_new[which(is.na(region_ids$region))]
+sum(!na %in% na_old) == 0
+
+eu_old <- region_ids$GCIN_new[which(region_ids$region == "EU")]
+sum(!eu %in% eu_old) == 0
+
+sa_old <- region_ids$GCIN_new[which(region_ids$region == "SA")]
+sum(!sa %in% sa_old) == 0
+
+af_old <- region_ids$GCIN_new[which(region_ids$region == "AF")]
+sum(!af %in% af_old) == 0
+
+oc_old <- region_ids$GCIN_new[which(region_ids$region == "OC")]
+sum(!oc %in% oc_old) == 0
+
+# Check features -------------
+xgdata_regional_repodc <- fread("C:/dev/xgdata_regional_dormant_for_check.csv")
+xgdata_regional_repodc$GCIN %>% unique() %>% length()
+xgdata_regional <- fread("C:/dev/xgdata_regional_dormant_for_check_from_script.csv")
+
+xgdata_regional  <- xgdata_regional %>%
+  left_join(
+    gcin_link %>%
+      dplyr::filter(period == "dormant") %>%
+      dplyr::select(c(GCIN_new, GCIN)),
+    by = "GCIN"
+  ) %>%
+  dplyr::select(-GCIN) %>%
+  rename(GCIN = GCIN_new) %>%
+  relocate(GCIN)
+
+summary(xgdata_regional)
+summary(xgdata_regional_repodc)
+
+check_df <- xgdata_regional_repodc %>%
+  dplyr::select(-Class) %>%
+  pivot_longer(cols = c(AI:Bare), names_to = "var", values_to = "repodc") %>%
+  left_join(
+    xgdata_regional %>%
+      dplyr::select(-Class) %>%
+      pivot_longer(cols = c(AI:Bare), names_to = "var", values_to = "baseline"),
+    by = c("GCIN", "var")
+  )
+
+check_df %>%
+  mutate(diff = repodc - baseline) %>% pull(diff) %>% summary()
+check_df %>% summary()
+
+check_df %>% dplyr::filter(is.na(repodc))
+
+# now it's consitent there was an issue in XGB ETC atts due to GCIN missmatch
+
+# Let's add other GCINs as well to XGB ETC based on older XGB ETC --------------
+new_xgb_etc <- fread("New_XGB_ETC_Atts.csv")
+old_xgb_etc <- fread("stormflow-behavior/data/XGB_ETC_Atts.csv")
+
+flagged_catchs <- fread("revised_submission/Revised_Gauged_Catchments_Metadata_and_Attributes.csv") %>%
+  dplyr::filter(Catchment_Boundary_Flagged) %>%
+  dplyr::select(c(GCIN, `Source ID`, country, longitude, latitude))
+
+flagged_xgb_etc <- old_xgb_etc %>%
+  dplyr::filter(id %in% flagged_catchs$`Source ID`) %>%
+  rename(`Source ID` = id) %>%
+  left_join(flagged_catchs %>% dplyr::select(c(GCIN, `Source ID`)),
+            by = "Source ID") %>%
+  dplyr::select(c(GCIN, period, `Slope/AI`, CTI, CTIW))
+
+flagged_xgb_etc$GCIN %>% unique() %>% length()
+
+new_xgb_etc <- new_xgb_etc %>%
+  bind_rows(new_xgb_etc) %>%
+  arrange(GCIN)
+
+fwrite(new_xgb_etc, "New_XGB_ETC_Atts.csv")
+
+

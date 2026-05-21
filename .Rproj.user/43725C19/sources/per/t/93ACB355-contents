@@ -1,0 +1,68 @@
+library(data.table)
+library(tidyverse)
+library(sf)
+setwd("C:/Laptop_Dev/visualization_data_v2/")
+
+revisied_gauged_atts_meta <- fread(
+  "revised_submission/Revised_Gauged_Catchments_Metadata_and_Attributes.csv"
+)
+gauged_atts_meta <- fread(
+  "revised_submission/Gauged_Catchments_Metadata_and_Attributes.csv"
+)
+gauged_atts_meta$`Source ID` %>% duplicated() %>% sum()
+# This is solved as well
+revisied_gauged_atts_meta$`Source ID` %>% duplicated() %>% sum()
+# Renaming was done in revised_submission and older file deleted
+
+
+prev_gauegd_atts_meta <- fread(
+  "All_Gauged_Catchments_Metadata.csv"
+)
+gcin_link <- fread(
+  "GCIN_Link_to_GCIN_for_Date_Submission.csv"
+)
+rev_a_xgb_etc <- fread(
+  "New_XGB_ETC_Atts.csv"
+)
+
+# Files in this github repo were updated on March 30 and work (hsharif work)
+rev_b_xgb_etc <- fread(
+  "C:/Laptop_Dev/stormflow-behavior/data/XGB_ETC_Atts.csv"
+)
+
+# remove duplicated training IDs
+# load("C:/Laptop_Dev/stormflow-behavior/data/Training_IDs.RData")
+# duplicated(training_ids_dormant) %>% sum()
+# duplicated(training_ids_growing) %>% sum()
+# There is no duplication.
+# need to fix XGB ETC REV B
+#
+# rev_b_xgb_etc_rev <- rev_b_xgb_etc %>%
+#   distinct(GCIN, period, `Slope/AI`, CTI, CTIW)
+#
+# rev_b_xgb_etc_rev %>%
+#   fwrite("C:/Laptop_Dev/stormflow-behavior/data/XGB_ETC_Atts.csv")
+
+check_xgb_etc <- rev_a_xgb_etc %>%
+  dplyr::filter(!Catchment_Boundary_Flagged) %>%
+  pivot_longer(cols = c(`Slope/AI`:CTIW), names_to = "var", values_to = "rev_a") %>%
+  left_join(rev_b_xgb_etc %>%
+              pivot_longer(cols = c(`Slope/AI`:CTIW), names_to = "var", values_to = "rev_b"),
+            by = c("GCIN", "period", "var"))
+
+(check_xgb_etc$rev_a - check_xgb_etc$rev_b) %>% summary()
+# Awesome there is no issue
+# So let's also extend the XGB ETC data
+# GCIN link were also correct then.
+
+rev_c_xgb_etc <- rev_b_xgb_etc %>%
+  bind_rows(
+    rev_a_xgb_etc %>%
+      dplyr::filter(Catchment_Boundary_Flagged) %>%
+      dplyr::select(-Catchment_Boundary_Flagged)
+  )
+
+fwrite(rev_c_xgb_etc, "C:/Laptop_Dev/stormflow-behavior/data/XGB_ETC_Atts.csv")
+
+
+

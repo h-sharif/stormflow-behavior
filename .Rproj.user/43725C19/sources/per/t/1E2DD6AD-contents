@@ -1,0 +1,795 @@
+---
+title: "New Reproducible Modelling"
+author: "Hamed Sharif"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 4
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE,
+                      warning = FALSE, dpi = 300,
+                      fig.align = 'center')
+options(knitr.kable.NA = '-')
+library(data.table)
+library(tidyverse)
+library(sf)
+library(rnaturalearth)
+library(xgboost)
+library(caret)
+library(ggnewscale)
+library(ggspatial)
+library(DT)
+library(patchwork)
+library(pbapply)
+library(progress)
+library(ggpubr)
+library(ggrepel)
+library(ggh4x)
+library(ggpmisc)
+library(DescTools)
+library(flextable)
+library(knitr)
+library(cvms)
+library(smotefamily)
+library(countrycode)
+library(kableExtra)
+
+theme_set(theme_bw(base_size = 9))
+```
+
+Previous analysis showed that XGBoost has a strong performance with 70% or 80% set for training plus following weights for Synthetic Minority Oversampling technique:
+
+* Growing: SMOTE with 0.18, 0.75, 0.07 weights
+* Dormant: SMOTE with 0.7, 0.25, 0.05 weights
+
+Similar to initial submission a trail analysis was done to identify the best XGBoost model for dormant and growing separately.
+
+There is along story of QA/QC for gauged set (and ungauged set to some degree). Urbanized catchments from various sources retrieved to get them added to both gauged and ungauged sets. Duplication and streamflow ratio were also controlled for catchments.
+
+## 1. Summary of New Gauged Dataset
+
+```{r}
+# 4245 reduced 
+# 3999 + 307
+# 4306 catchments
+df_xgboost <- fread("All_Features_Behavioral_Classes_with_New_Gauged.csv")
+df_metadata <- fread("All_Gauged_Catchments_Metadata.csv") 
+df_xgboost <- df_xgboost %>%
+  mutate(
+    behavioral_class = ordered(
+      behavioral_class, levels = c("simple", "intermediate", "complex")
+    )
+  ) %>%
+  drop_na(behavioral_class)
+length(df_xgboost$GCIN %>% unique())
+
+# regions
+na <- df_metadata %>%
+  dplyr::filter(country %in% c("CA", "US")) %>% pull(GCIN)
+
+sa <- df_metadata %>% 
+  mutate(
+    country = ifelse(country == "AUS", "AU", country),
+    continent = countrycode(country, origin = "iso2c",
+                            destination = "region")
+  ) %>%
+  dplyr::filter(continent == "Latin America & Caribbean") %>% pull(GCIN)
+
+eu <- df_metadata %>% 
+  mutate(
+    country = ifelse(country == "AUS", "AU", country),
+    continent = countrycode(country, origin = "iso2c",
+                            destination = "continent")
+  ) %>%
+  dplyr::filter(continent == "Europe") %>% pull(GCIN)
+
+uk <- df_metadata %>% 
+  mutate(
+    country = ifelse(country == "AUS", "AU", country),
+    continent = countrycode(country, origin = "iso2c",
+                            destination = "continent")
+  ) %>%
+  dplyr::filter(country == "GB") %>% pull(GCIN)
+
+eu_non_uk <- setdiff(eu, uk)
+
+af <- df_metadata %>% 
+  mutate(
+    country = ifelse(country == "AUS", "AU", country),
+    continent = countrycode(country, origin = "iso2c",
+                            destination = "continent")
+  ) %>%
+  dplyr::filter(continent == "Africa") %>% pull(GCIN)
+
+oc <- df_metadata %>% 
+  mutate(
+    country = ifelse(country == "AUS", "AU", country),
+    continent = countrycode(country, origin = "iso2c",
+                            destination = "continent")
+  ) %>%
+  dplyr::filter(continent == "Oceania") %>% pull(GCIN)
+
+regions_ids <- data.frame(
+  region = c(
+    rep("NA", length(na)), rep("SA", length(sa)), rep("EU non UK", length(eu_non_uk)),
+    rep("UK", length(uk)), rep("AF", length(af)), rep("OC", length(oc))
+  ),
+  GCIN = c(na, sa, eu_non_uk, uk, af, oc)
+)
+```
+
+
+
+```{r}
+df_xgboost %>%
+  group_by(period, behavioral_class) %>%
+  summarise(
+    Num_catchments = n(), .groups = "drop"
+  ) %>%
+  kable(col.names = c("Period", "Behavioral Class", "Number of Catchments"),
+        align = "lcc", format = "html") %>%
+  row_spec(0:6, background = "white", color = "black")
+
+  
+```
+
+```{r}
+summary(df_xgboost)
+```
+
+## 2. XGBoost Automated Batch Experiment Functions
+
+```{r}
+# function to get the performance metrics for both training set and test set
+# as well as all samples
+calculate_class_metrics <- function(conf_matrix, class_index) {
+  true_positives <- conf_matrix[class_index, class_index]
+  false_positives <- sum(conf_matrix[, class_index]) - true_positives
+  false_negatives <- sum(conf_matrix[class_index, ]) - true_positives
+  true_negatives <- sum(conf_matrix) - 
+    (true_positives + false_positives + false_negatives)
+  
+  precision <- true_positives / (true_positives + false_positives)
+  recall <- true_positives / (true_positives + false_negatives)
+  specificity <- true_negatives / (true_negatives + false_positives)
+  f1_score <- 2 * (precision * recall) / (precision + recall)
+  
+  list(precision = precision, recall = recall,
+       specificity = specificity, f1_score = f1_score)
+}
+
+eval_metrics_exe <- function(model, dmatrix, obs_labels) {
+  # Predict on the test set
+  pred <- predict(model, newdata = dmatrix)
+  pred_labels <- max.col(matrix(pred,
+                                ncol = 3,
+                                byrow = TRUE)) - 1
+  
+  conf_mat <- confusionMatrix(ordered(pred_labels, levels = c(0, 1, 2)),
+                              ordered(as.numeric(obs_labels) - 1, 
+                                      levels = c(0, 1, 2)))
+  # calculate simple performances
+  performances_simple <- calculate_class_metrics(conf_mat$table, 1)
+  # calculate intermediate performances
+  performances_intermediate <- calculate_class_metrics(conf_mat$table, 2)
+  # calculate complex performance
+  performances_complex <- calculate_class_metrics(conf_mat$table, 3)
+  
+  # evaluating complex vs non-complex
+  testLabels_adj <- ifelse(obs_labels %in% c("simple", "intermediate"),
+                           "non-complex", "complex")
+  testLabels_adj <- ordered(testLabels_adj,
+                            levels = c("non-complex", "complex"))
+  pred_labels_adj <- ifelse(pred_labels %in% c(0, 1), 0, 1)
+  conf_mat_adj <- confusionMatrix(ordered(pred_labels_adj, levels = c(0, 1)),
+                                  ordered(as.numeric(testLabels_adj) - 1,
+                                          levels = c(0, 1)))
+  performances_noncomplex <- calculate_class_metrics(conf_mat_adj$table, 1) 
+  performances_complex_adj <- calculate_class_metrics(conf_mat_adj$table, 2) 
+  
+  return(
+    data.frame(
+      behavioral_class = c("simple", "intermediate", "complex", "REV non-complex",
+                           "REV complex"),
+      num_samples = c(
+        summary(obs_labels), summary(testLabels_adj)
+      ),
+      precision = c(performances_simple$precision,
+                    performances_intermediate$precision,
+                    performances_complex$precision,
+                    performances_noncomplex$precision,
+                    performances_complex_adj$precision),
+      specificity = c(performances_simple$specificity,
+                      performances_intermediate$specificity,
+                      performances_complex$specificity,
+                      performances_noncomplex$specificity,
+                      performances_complex_adj$specificity)
+    )
+  )
+}
+```
+
+```{r, eval=FALSE}
+xgb_exe <- function(prd, p, manual_weights_vec) {
+  names(manual_weights_vec) <- c("simple", "intermediate", "complex")
+  params <- list(
+    booster = "gbtree",
+    objective = "multi:softprob",  # For multi-class classification
+    num_class = 3,
+    eval_metric = "mlogloss",
+    eta = 0.3,
+    max_depth = 8,
+    subsample = 0.6
+    #colsample_bytree = 0.8
+  )
+  cv.nround <- 100
+  cv.nfold <- 5
+  early_stopping_rounds <- 20
+  
+  # XGBoost --------------------------------------------------------------------
+  xgdata_regional <- df_xgboost %>%
+    dplyr::filter(period == prd) %>%
+    dplyr::select(-c(period, Version)) %>%
+    rename(Class = behavioral_class)
+  
+  xgdata <- df_xgboost %>%
+    dplyr::filter(period == prd) %>%
+    dplyr::select(-c(GCIN, period, Version)) %>%
+    rename(Class = behavioral_class)
+  
+  features <- xgdata %>% dplyr::select(-Class)
+  labels <- xgdata$Class
+  trainIndex <- createDataPartition(labels, p = p, list = FALSE)
+  trainData <- xgdata[trainIndex, ]
+  testData <- xgdata[-trainIndex, ]
+  # intermediate and complex instances are much larger in number.
+  if (!("simple" %in% trainData$Class) | 
+      !("simple" %in% testData$Class)) {
+    simples <- which(labels == "simple")
+    trainIndex1_index <- createDataPartition(simples, p = p, list = FALSE)
+    trainIndex1 <- simples[trainIndex1_index]
+    nonsimples <- which(labels != "simple")
+    trainIndex2_index <- createDataPartition(nonsimples, p = p, list = FALSE)
+    trainIndex2 <- nonsimples[trainIndex2_index]
+    trainIndex <- c(trainIndex1, trainIndex2)
+    trainData <- xgdata[trainIndex, ]
+    testData <- xgdata[-trainIndex, ]
+  }
+  train_ids <- xgdata_regional$GCIN[trainIndex]
+  
+  trainFeatures <- trainData %>% dplyr::select(-Class)
+  trainLabels <- trainData$Class
+  testFeatures <- testData %>% dplyr::select(-Class)
+  testLabels <- testData$Class
+  
+  # Applying both Weighting and SMOTE
+  synth_obj <- SMOTE(trainFeatures, trainLabels)
+  trainLabels <- synth_obj$data$class
+  class_counts <- table(trainLabels)
+  class_weights <- 1 / class_counts
+  class_weights <- class_weights / sum(class_weights)
+  instance_weights <- class_weights[as.character(trainLabels)]
+  dtrain <- xgb.DMatrix(data = as.matrix(synth_obj$data[, c(1:27)]),
+                        label = as.numeric(synth_obj$data$class) - 1,
+                        weight = instance_weights)
+  dtest <- xgb.DMatrix(data = as.matrix(testFeatures), 
+                       label = as.numeric(testLabels) - 1)
+  cv <- xgb.cv(
+    params = params,
+    data = dtrain,
+    nrounds = cv.nround,
+    nfold = cv.nfold,
+    early_stopping_rounds = early_stopping_rounds,
+    verbose = FALSE
+  )
+  best_nrounds <- cv$best_iteration
+  final_model <- xgb.train(
+    params = params,
+    data = dtrain,
+    nrounds = best_nrounds,
+    watchlist = list(train = dtrain, eval = dtest),
+    verbose = FALSE
+  )
+  
+  train_mlogloss <- final_model$evaluation_log$train_mlogloss[best_nrounds]
+  eval_mlogloss <- final_model$evaluation_log$eval_mlogloss[best_nrounds]
+  
+  result_train_df <- bind_rows(
+    eval_metrics_exe(final_model, dtrain, trainLabels) %>%
+      mutate(Period = prd,
+             Set = "Training",
+             LogLoss = train_mlogloss) %>%
+      relocate(Period, Set),
+    eval_metrics_exe(final_model, dtest, testLabels) %>%
+      mutate(Period = prd,
+             Set = "Testing",
+             LogLoss = eval_mlogloss) %>%
+      relocate(Period, Set)
+  ) %>%
+    mutate(
+      behavioral_class = ordered(
+        behavioral_class,
+        levels = c("simple", "intermediate", "complex", "REV non-complex",
+                   "REV complex")
+      )
+    ) %>%
+    relocate(LogLoss, .after = specificity)
+  
+  # get regional labels and features
+  result_regions_df <- data.frame()
+  for (n in c("NA", "SA", "EU non UK", "UK", "AF", "OC")) {
+    ids <- regions_ids$GCIN[which(regions_ids$region == n)]
+    dtest_iter <- xgb.DMatrix(
+      data = as.matrix(
+        xgdata_regional[which(xgdata_regional$GCIN %in% ids)] %>%
+          dplyr::select(-c(GCIN, Class))
+      ), 
+      label = as.numeric(
+        xgdata_regional[which(xgdata_regional$GCIN %in% ids)] %>%
+          pull(Class)
+      ) - 1
+    )
+    labels_iter <- xgdata_regional[which(xgdata_regional$GCIN %in% ids)] %>%
+      pull(Class)
+    result_regions_df <- rbind(
+      result_regions_df,
+      eval_metrics_exe(final_model, dtest_iter, labels_iter) %>%
+        mutate(Period = prd, Set = n) %>%
+      relocate(Period, Set)
+    )
+  }
+  
+  return(
+    list(
+      training_ids = train_ids,
+      model = final_model,
+      eval_all = result_train_df,
+      eval_regions = result_regions_df
+    )
+  )
+}
+
+# test
+# test_res <- xgb_exe("dormant", 0.7, c(0.1, 0.82, 0.1))
+# a <- test_res$eval_all
+# b <- test_res$eval_regions
+# might fail to calculate the confusion matrix if one of the classes are missed
+# entirely in either observed or predicted sets!
+```
+
+
+## 3. Execution
+
+```{r, eval=FALSE}
+set.seed(123)
+trainig_ids_df <- data.frame()
+all_results_traintest <- data.frame()
+all_results_regions <- data.frame()
+pb <- progress_bar$new(total = 400)
+for (p in c("dormant", "growing")) {
+  if (p == "growing") {
+    weights <- c(0.18, 0.75, 0.07)
+  } else {
+    weights <- c(0.7, 0.25, 0.05)
+  }
+  for (frac in c(0.7, 0.8)) {
+    for (i in c(1:100)) {
+      res_iter <- xgb_exe(p, frac, weights)
+      xgb.save(res_iter$model,
+               file.path("new_models_repodc/",
+                         paste0(p, "_", frac, "_", i)))
+      trainig_ids_df <- rbind(trainig_ids_df,
+                              data.frame(Fraction = frac,
+                                         Period = p,
+                                         Trial = i,
+                                         training_ids = res_iter$training_ids))
+      all_results_traintest <- rbind(all_results_traintest,
+                                     res_iter$eval_all %>%
+                                       mutate(Fraction = frac,
+                                              Trial = i) %>%
+                                       relocate(Fraction, Trial))
+      all_results_regions <- rbind(all_results_regions,
+                                   res_iter$eval_regions %>%
+                                       mutate(Fraction = frac,
+                                              Trial = i) %>%
+                                       relocate(Fraction, Trial))
+      pb$tick()
+    }
+  }
+}
+fwrite(trainig_ids_df, "new_models_repodc/training_ids.csv")
+fwrite(all_results_traintest, "new_models_repodc/All_Results_TrainTest.csv")
+fwrite(all_results_regions, "new_models_repodc/All_Results_Regions.csv")
+```
+
+## 4. Performance and Trial Selections
+
+**Let's first verify that regional performance are consistently good among different trials:**
+
+```{r}
+trainig_ids_df <- fread("new_models_repodc/training_ids.csv")
+all_results_traintest <- fread("new_models_repodc/All_Results_TrainTest.csv")
+all_results_regions <- fread("new_models_repodc/All_Results_Regions.csv")
+```
+
+
+### 4.1. Check Training Performance Among Trials
+
+```{r, fig.width=6, fig.height=4}
+all_results_traintest %>%
+  ggplot(aes(x = Set, y = LogLoss)) +
+  geom_boxplot(fill = grey(0.3, 0.3), notch = TRUE, outliers = TRUE, 
+               outlier.color = "red2") +
+  facet_wrap(vars(Period), ncol = 2, scales = "free") +
+  labs(x = "", y = "Cross Entropy (-)")
+```
+
+---
+
+As can be seen from above figure, training has been done well in both growing and dormant seasons with low cross entropy loss function value across all trials with Q1 to Q3 length being so small. However, we can see there are trials with significantly lower and higher cross entropy values for test sets. 
+
+### 4.2. Check Regional Performance Among Trials
+
+```{r, fig.width=8, fig.height=14}
+all_results_regions %>%
+  mutate(
+    behavioral_class = ordered(behavioral_class,
+                               levels = c("simple", "intermediate", "complex",
+                                          "REV non-complex", "REV complex")),
+    Set = ifelse(Set == "NA" | is.na(Set), "North America", Set),
+    Set = ordered(Set,
+                  levels = c("North America", "SA", "EU non UK", "UK", "AF", "OC")),
+  ) %>%
+  pivot_longer(cols = c(precision, specificity), names_to = "metric", 
+               values_to = "eval") %>%
+  ggplot(aes(x = behavioral_class, y = eval, fill = behavioral_class)) +
+  geom_boxplot(notch = FALSE, outliers = TRUE) +
+  scale_fill_manual(
+    values = c(
+      rgb(0.2, 0.2, 0.8, alpha = 0.7),
+      rgb(0.2, 0.8, 0.2, alpha = 0.7),
+      rgb(0.8, 0.2, 0.2, alpha = 0.7),
+      grDevices::adjustcolor("purple", alpha.f = 0.7),
+      grDevices::adjustcolor("darkred", alpha.f = 0.7)
+    ),
+    guide = "none"
+  ) +
+  facet_grid2(Set + metric ~ Period, remove_labels = "all") +
+  geom_text(
+    data = all_results_regions %>%
+      mutate(
+        behavioral_class = ordered(behavioral_class,
+                               levels = c("simple", "intermediate", "complex",
+                                          "REV non-complex", "REV complex")),
+        Set = ifelse(Set == "NA" | is.na(Set), "North America", Set),
+        Set = ordered(Set,
+                      levels = c("North America", "SA", "EU non UK", "UK", "AF", "OC"))
+      ) %>%
+    group_by(Period, Set, behavioral_class) %>%
+      summarise(num_samples = mean(num_samples),
+                .groups = "drop") %>%
+      mutate(loc = 0.3),
+    aes(x = behavioral_class, y = loc, label = paste("n =", num_samples)),
+    size = 8, size.unit = "pt"
+  ) +
+  labs(x = "Behavioral Class", y = "Evaluation Metric (-)",
+       caption = "SA: South America, EU: Europe, AF: Africa, OC: Oceania",
+       subtitle = "n = xxx shows the number of gauged catchments in each region and period.") +
+  theme(
+    strip.text = element_text(face = "bold", size = 10),
+    plot.subtitle = element_text(face = "bold", size = 12),
+    plot.caption = element_text(hjust = 0, face = "bold", size = 9),
+    axis.text.x = element_text(angle = 30, margin = ggplot2::margin(t = 9))
+  ) +
+  scale_y_continuous(limits = c(0, 1),
+                     breaks = seq(0, 1, by = 0.2),
+                     minor_breaks = seq(0, 1, by = 0.1)) 
+```
+
+
+---
+
+Above figure perfectly shows that we have only uncertain results across trials only for `precision` metric and `simple` behavioral class when the number of samples are less than 20. This is not a problem as it not expected for XGBoost to learn everything where we have scares gauged catchments of a given behavioral class.
+
+So, the above two figures strongly supported the idea to just select the best model based on lowest cross entropy for the test set across the trials. Let's do that.
+
+
+### 4.3. Best Dormant Model
+
+```{r}
+sorted_models <- all_results_traintest %>%
+  dplyr::filter(Set == "Testing", Period == "dormant") %>%
+  group_by(Fraction, Trial) %>%
+  summarise(LogLoss = mean(LogLoss), .groups = "drop") %>%
+  arrange(LogLoss)
+
+sorted_models %>%
+  head(n = 5)
+```
+
+---
+
+Above table shows the five best trial in dormant season in terms of having lowest cross entropy for the test set. Let's check the performance of Trial 43 with 80/20% fraction for training and testing:
+
+```{r, fig.width=10, fig.height=4}
+all_results_traintest %>%
+  mutate(
+    behavioral_class = ordered(behavioral_class,
+                               levels = c("simple", "intermediate", "complex",
+                                          "REV non-complex", "REV complex"))
+  ) %>%
+  dplyr::filter(Fraction == 0.8, Trial == 43, Period == "dormant") %>%
+  pivot_longer(cols = c(precision, specificity), names_to = "var",
+               values_to = "val") %>%
+  ggplot(aes(x = behavioral_class, y = val)) +
+  geom_col(fill = grey(0.3, 0.3)) +
+  facet_grid2(var ~ Set, remove_labels = TRUE) +
+  labs(x = "", y = "") +
+  scale_y_continuous(breaks = seq(0, 1, by = 0.2),
+                     minor_breaks = seq(0, 1, by = 0.1),
+                     limits = c(0, 1)) +
+  theme_bw(base_size = 9) +
+  theme(
+    strip.text = element_text(face = "bold", size = 11)
+  ) +
+  geom_text(aes(label = num_samples))
+
+```
+
+---
+
+Let's see if we can improve the intermediate precision by changing the trial. So, let's check where there is a trial with all precision above 0.6 for all classes in test sets.
+
+```{r, echo=TRUE}
+all_results_traintest %>%
+  dplyr::filter(Set == "Testing", Period == "dormant") %>%
+  dplyr::select(c(Fraction, Trial, behavioral_class, precision)) %>%
+  pivot_wider(names_from = behavioral_class, values_from = precision) %>%
+    dplyr::filter(simple >= 0.6, intermediate >= 0.6, complex >= 0.6)
+```
+
+---
+
+Above code shows that we have 12 trials with all precision for simple, intermediate, and complex being higher than 0.6. Trial 82 with 20/80% fraction appears to be the best.
+
+
+```{r, fig.width=10, fig.height=4}
+all_results_traintest %>%
+  mutate(
+    behavioral_class = ordered(behavioral_class,
+                               levels = c("simple", "intermediate", "complex",
+                                          "REV non-complex", "REV complex"))
+  ) %>%
+  dplyr::filter(Fraction == 0.8, Trial == 82, Period == "dormant") %>%
+  pivot_longer(cols = c(precision, specificity), names_to = "var",
+               values_to = "val") %>%
+  ggplot(aes(x = behavioral_class, y = val)) +
+  geom_col(fill = grey(0.3, 0.3)) +
+  facet_grid2(var ~ Set, remove_labels = TRUE) +
+  labs(x = "", y = "") +
+  scale_y_continuous(breaks = seq(0, 1, by = 0.2),
+                     minor_breaks = seq(0, 1, by = 0.1),
+                     limits = c(0, 1)) +
+  theme_bw(base_size = 9) +
+  theme(
+    strip.text = element_text(face = "bold", size = 11)
+  ) +
+  geom_text(aes(label = num_samples))
+
+```
+
+---
+
+Below table shows the precision among classes for both 80/20% and 70/30% train-test subset. It has been also sorted from high to low for the intermediate class.
+
+```{r, echo=TRUE}
+all_results_traintest %>%
+  dplyr::filter(Set == "Testing", Period == "dormant") %>%
+  dplyr::select(c(Fraction, Trial, behavioral_class, precision)) %>%
+  pivot_wider(names_from = behavioral_class, values_from = precision) %>%
+  arrange(desc(intermediate)) %>%
+  datatable(caption = "Precision Metric Sorted with a Descending Order for Intermediate Class") %>%
+  formatRound(columns = c("simple", "intermediate", "complex", "REV non-complex",
+                          "REV complex"), 
+              digits = 3)
+```
+
+---
+
+Let's use trial 82 with 80/20% set as it seems to have the best performance. Following shows the regional performance for this trial in dormant season:
+
+```{r}
+all_results_regions %>%
+  mutate(Set = ifelse(Set == "NA" | is.na(Set), "North America", Set)) %>%
+  dplyr::filter(Fraction == 0.8, Trial == 82, Period == "dormant") %>%
+  kable(
+    digits = 2, 
+    align = "lcccccccc", caption = "Trial 82 Regional Results (80/20%)"
+  ) %>%
+  column_spec(1:8, extra_css = "padding-left:25px; padding-right:25px;") %>%
+  row_spec(0:30, background = "white", color = "black")
+```
+
+---
+
+```{r}
+model <- xgb.load("new_models_repodc/dormant_0.8_82") 
+importance_matrix <- xgb.importance(model = model, feature_names = colnames(df_xgboost)[3:29])
+importance_matrix
+fwrite(importance_matrix, "Feature_Importance_Dormant.csv")
+```
+
+---
+
+```{r}
+all_results_traintest %>%
+  mutate(
+    behavioral_class = ordered(behavioral_class,
+                               levels = c("simple", "intermediate", "complex",
+                                          "REV non-complex", "REV complex"))
+  ) %>%
+  dplyr::filter(Fraction == 0.8, Trial == 82, Period == "dormant") %>%
+  dplyr::select(-num_samples, -LogLoss)
+```
+
+
+### 4.4. Best Growing Model
+
+```{r}
+sorted_models <- all_results_traintest %>%
+  dplyr::filter(Set == "Testing", Period == "growing") %>%
+  group_by(Fraction, Trial) %>%
+  summarise(LogLoss = mean(LogLoss), .groups = "drop") %>%
+  arrange(LogLoss)
+
+sorted_models %>%
+  head(n = 5)
+```
+
+Above table shows the five best trial in growing season in terms of having lowest cross entropy for the test set. Let's check the performance of Trial 6 with 80/20% fraction for training and testing:
+
+```{r, fig.width=10, fig.height=4}
+all_results_traintest %>%
+  mutate(
+    behavioral_class = ordered(behavioral_class,
+                               levels = c("simple", "intermediate", "complex",
+                                          "REV non-complex", "REV complex"))
+  ) %>%
+  dplyr::filter(Fraction == 0.8, Trial == 6, Period == "growing") %>%
+  pivot_longer(cols = c(precision, specificity), names_to = "var",
+               values_to = "val") %>%
+  ggplot(aes(x = behavioral_class, y = val)) +
+  geom_col(fill = grey(0.3, 0.3)) +
+  facet_grid2(var ~ Set, remove_labels = TRUE) +
+  labs(x = "", y = "") +
+  scale_y_continuous(breaks = seq(0, 1, by = 0.2),
+                     minor_breaks = seq(0, 1, by = 0.1),
+                     limits = c(0, 1)) +
+  theme_bw(base_size = 9) +
+  theme(
+    strip.text = element_text(face = "bold", size = 11)
+  ) +
+  geom_text(aes(label = num_samples))
+
+```
+
+---
+
+Let's see if we can get higher performance as well for simple as well. So, let's check where there is a trial with high `REV non-complex` precision.
+
+```{r, echo=TRUE}
+all_results_traintest %>%
+  dplyr::filter(Set == "Testing", Period == "growing") %>%
+  dplyr::select(c(Fraction, Trial, behavioral_class, precision)) %>%
+  pivot_wider(names_from = behavioral_class, values_from = precision) %>%
+    dplyr::filter(`REV non-complex` > 0.7) %>% 
+    head(n = 10)
+```
+
+Above table shows the trials with `REV non-complex` precision above 70%. Now, let's check if we have trials with all precision's being above 60% for simple, intermediate and complex.
+
+```{r, echo=TRUE}
+all_results_traintest %>%
+  dplyr::filter(Set == "Testing", Period == "growing") %>%
+  dplyr::select(c(Fraction, Trial, behavioral_class, precision)) %>%
+  pivot_wider(names_from = behavioral_class, values_from = precision) %>%
+    dplyr::filter(simple > 0.6, intermediate > 0.6, complex > 0.6) %>% 
+    head(n = 10)
+```
+
+Trial 92 is another good candidate which is the only trial with all precision's above 60% with 80/20% fraction for training/testing.
+
+> Trial 95 with 80/20% fraction
+
+```{r, fig.width=10, fig.height=4}
+all_results_traintest %>%
+  mutate(
+    behavioral_class = ordered(behavioral_class,
+                               levels = c("simple", "intermediate", "complex",
+                                          "REV non-complex", "REV complex"))
+  ) %>%
+  dplyr::filter(Fraction == 0.8, Trial == 95, Period == "growing") %>%
+  pivot_longer(cols = c(precision, specificity), names_to = "var",
+               values_to = "val") %>%
+  ggplot(aes(x = behavioral_class, y = val)) +
+  geom_col(fill = grey(0.3, 0.3)) +
+  facet_grid2(var ~ Set, remove_labels = TRUE) +
+  labs(x = "", y = "") +
+  scale_y_continuous(breaks = seq(0, 1, by = 0.2),
+                     minor_breaks = seq(0, 1, by = 0.1),
+                     limits = c(0, 1)) +
+  theme_bw(base_size = 9) +
+  theme(
+    strip.text = element_text(face = "bold", size = 11)
+  ) +
+  geom_text(aes(label = num_samples))
+
+```
+
+---
+
+Let's check the regional performance:
+
+```{r}
+all_results_regions %>%
+  mutate(
+    Set = ifelse(Set == "NA" | is.na(Set), "North America", Set)
+  ) %>%
+  dplyr::filter(Fraction == 0.8, Trial == 95, Period == "growing") %>%
+  kable(
+    digits = 2, 
+    align = "lcccccccc", caption = "Trial 95 Regional Results (80/210% fraction)"
+  ) %>%
+  column_spec(1:8, extra_css = "padding-left:25px; padding-right:25px;") %>%
+  row_spec(0:30, background = "white", color = "black")
+```
+
+
+---
+
+Let's check the regional performance:
+
+```{r}
+all_results_regions %>%
+  mutate(
+    Set = ifelse(Set == "NA" | is.na(Set), "North America", Set)
+  ) %>%
+  dplyr::filter(Fraction == 0.8, Trial == 79, Period == "growing") %>%
+  kable(
+    digits = 2, 
+    align = "lcccccccc", caption = "Trial 79 Regional Results (80/20% fraction)"
+  ) %>%
+  column_spec(1:8, extra_css = "padding-left:25px; padding-right:25px;") %>%
+  row_spec(0:30, background = "white", color = "black")
+```
+
+
+---
+
+```{r}
+model <- xgb.load("new_models_repodc/growing_0.8_95") 
+importance_matrix <- xgb.importance(model = model, feature_names = colnames(df_xgboost)[3:29])
+importance_matrix
+fwrite(importance_matrix, "Feature_Importance_growing.csv")
+```
+
+```{r}
+all_results_traintest %>%
+  mutate(
+    behavioral_class = ordered(behavioral_class,
+                               levels = c("simple", "intermediate", "complex",
+                                          "REV non-complex", "REV complex"))                                  
+  ) %>%
+  dplyr::filter(Fraction == 0.8, Trial == 79, Period == "growing") %>%
+  dplyr::select(-num_samples, -LogLoss)
+```
+
+
+Meeting notes:
+1. trial 95 for growing
+2. trial 82 for dormant
+3. num_samples > 5

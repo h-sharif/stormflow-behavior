@@ -1,0 +1,274 @@
+library(tidyverse)
+library(data.table)
+library(ggpubr)
+library(ggrepel)
+library(ggh4x)
+library(countrycode)
+library(scales)
+library(rnaturalearth)
+library(sf)
+library(patchwork)
+setwd("C:/Users/hsharif/OneDrive - SLR Consulting/Global_Office/visualization_data_v1/")
+
+countries <- ne_countries()
+countries_simple <- st_make_valid(countries)
+countries_simple[15, ] <- st_make_valid(countries_simple[15, ])
+countries_simple <- st_simplify(countries_simple[-15, ], dTolerance = 0.01)
+
+ungauged_df <- fread("submission/REV A Ungauged_Catchments_Metadata_and_Attributes.csv") %>%
+  mutate(
+    country = ifelse(is.na(country) | country == "", "NA", country),
+    continent = countrycode(country, origin = "iso2c",
+                            destination = "region")
+  ) %>%
+  mutate(
+    continent = countrycode(country, origin = "iso2c",
+                            destination = "continent"),
+    continent_regional = countrycode(country, origin = "iso2c",
+                                     destination = "region"),
+    region = case_when(
+      `Polygon Source` == "BCUB" ~ "Canada (BC)",
+      country == "US" ~ "United States of America",
+      continent == "Americas" & continent_regional == "Latin America & Caribbean"
+      ~ "Latin America & Caribbean",
+      .default = continent,
+    ),
+    region = ordered(region,
+                     levels = c("Canada (BC)", 
+                                "United States of America",
+                                "Latin America & Caribbean",
+                                "Europe",
+                                "Africa",
+                                "Asia",
+                                "Oceania")),
+    dormant = ordered(dormant_predicted_class,
+                      levels = c("simple", "intermediate", "complex")),
+    growing = ordered(growing_predicted_class,
+                      levels = c("simple", "intermediate", "complex"))
+  )
+
+experimental_df_dormant <- fread("experimental_wsheds/Predicted_Class_Dormant.csv") %>%
+  st_as_sf(coords = c("Lon", "Lat"), crs = 4326) %>%
+  st_join(countries_simple) %>%
+  st_drop_geometry() %>%
+  mutate(name = case_when(Name == "Rompeviento and El Nancite, Nicaragua, Nicaragua" ~ "Nicaragua",
+                          Name == "Baratz catchment, Sardinia, Italy" ~ "Italy",
+                          Name == "Retiro headwater catchment, Peri Lake, Brazil" ~ "Brazil",
+                          .default = name),
+         iso_a2 = case_when(Name == "Rompeviento and El Nancite, Nicaragua, Nicaragua" ~ "NI",
+                            Name == "Baratz catchment, Sardinia, Italy" ~ "IT",
+                            Name == "Retiro headwater catchment, Peri Lake, Brazil" ~ "BR",
+                            .default = iso_a2)) %>%
+  mutate(
+    iso_a2 = ifelse(iso_a2 == -99, iso_a2_eh, iso_a2),
+    continent = countrycode(iso_a2, origin = "iso2c",
+                            destination = "continent"),
+    continent_regional = countrycode(iso_a2, origin = "iso2c",
+                                     destination = "region"),
+    region = case_when(
+      iso_a2 == "US" ~ "United States of America",
+      continent == "Americas" & continent_regional == "Latin America & Caribbean"
+      ~ "Latin America & Caribbean",
+      .default = continent,
+    ),
+    region = ordered(region,
+                     levels = c("United States of America", 
+                                "Latin America & Caribbean",
+                                "Europe",
+                                "Africa",
+                                "Asia",
+                                "Oceania")),
+    dormant = ordered(behavioral_class,
+                      levels = c("simple", "intermediate", "complex"))
+  ) %>%
+  st_drop_geometry() %>%
+  dplyr::select(c(id, region, dormant))
+
+experimental_df_growing <- fread("experimental_wsheds/Predicted_Class_Growing.csv") %>%
+  st_as_sf(coords = c("Lon", "Lat"), crs = 4326) %>%
+  st_join(countries_simple) %>%
+  st_drop_geometry() %>%
+  mutate(name = case_when(Name == "Rompeviento and El Nancite, Nicaragua, Nicaragua" ~ "Nicaragua",
+                          Name == "Baratz catchment, Sardinia, Italy" ~ "Italy",
+                          Name == "Retiro headwater catchment, Peri Lake, Brazil" ~ "Brazil",
+                          .default = name),
+         iso_a2 = case_when(Name == "Rompeviento and El Nancite, Nicaragua, Nicaragua" ~ "NI",
+                            Name == "Baratz catchment, Sardinia, Italy" ~ "IT",
+                            Name == "Retiro headwater catchment, Peri Lake, Brazil" ~ "BR",
+                            .default = iso_a2)) %>%
+  mutate(
+    iso_a2 = ifelse(iso_a2 == -99, iso_a2_eh, iso_a2),
+    continent = countrycode(iso_a2, origin = "iso2c",
+                            destination = "continent"),
+    continent_regional = countrycode(iso_a2, origin = "iso2c",
+                                     destination = "region"),
+    region = case_when(
+      iso_a2 == "US" ~ "United States of America",
+      continent == "Americas" & continent_regional == "Latin America & Caribbean"
+      ~ "Latin America & Caribbean",
+      .default = continent,
+    ),
+    region = ordered(region,
+                     levels = c("United States of America", 
+                                "Latin America & Caribbean",
+                                "Europe",
+                                "Africa",
+                                "Asia",
+                                "Oceania")),
+    growing = ordered(behavioral_class,
+                      levels = c("simple", "intermediate", "complex"))
+  ) %>%
+  st_drop_geometry() %>%
+  dplyr::select(c(id, growing))
+
+
+
+experimental_df <- full_join(
+  experimental_df_dormant,
+  experimental_df_growing,
+  by = "id"
+)
+
+# (experimental_df$region.x != experimental_df$region.y) %>% sum()
+
+full_df <- ungauged_df %>%
+  mutate(region = as.character(region)) %>%
+  dplyr::select(c(region, dormant, growing)) %>%
+  pivot_longer(c(2, 3), names_to = "period", values_to = "class") %>%
+  drop_na(class) %>%
+  count(region, period, class) %>%
+  group_by(region, period) %>%
+  mutate(
+    percent_ungauged = n / sum(n),
+    label_ungauged = n
+  ) %>%
+  ungroup() %>%
+  dplyr::filter(
+    region %in% c("United States of America", 
+                  "Latin America & Caribbean",
+                  "Europe",
+                  "Africa",
+                  "Asia",
+                  "Oceania")
+  ) %>%
+  left_join(
+    experimental_df %>%
+      mutate(region = as.character(region)) %>%
+      dplyr::select(c(region, dormant, growing)) %>%
+      pivot_longer(c(2, 3), names_to = "period", values_to = "class") %>%
+      drop_na(class) %>%
+      count(region, period, class) %>%
+      group_by(region, period) %>%
+      mutate(
+        percent_experimental = n / sum(n),
+        label_experimental = n
+      ) %>%
+      ungroup(),
+    by = c("region", "period", "class")
+  ) %>%
+  mutate(
+    region = ordered(region,
+                     levels = c("United States of America", 
+                                "Latin America & Caribbean",
+                                "Europe",
+                                "Africa",
+                                "Asia",
+                                "Oceania"))
+  ) %>%
+  dplyr::select(-c(n.x, n.y)) %>%
+  pivot_longer(
+    cols = c(percent_experimental, label_experimental, percent_ungauged,
+             label_ungauged),
+    names_to = c("value_type", "group"),
+    names_sep = "_",
+    values_to = "value"
+  ) %>%
+  pivot_wider(names_from = value_type, values_from = value) %>%
+  mutate(
+    group = ifelse(group == "experimental", "Experimental", "Ungauged"),
+    group = ordered(group, levels = c("Experimental", 'Ungauged'))
+  ) %>%
+  mutate(
+    class = case_when(
+      class == "simple" ~ "s",
+      class == "intermediate" ~ "i",
+      class == "complex" ~ "c"
+    ),
+    class = ordered(class, levels = c("s", "i", "c")),
+    period = case_when(
+      period == "dormant" ~ "Dormant",
+      period == "growing" ~ "Growing"
+    ),
+    period = ordered(period, levels = c("Dormant", "Growing")),
+    percent = ifelse(is.na(percent), 0, percent),
+    label = ifelse(is.na(label), 0, label)
+  )
+
+plt1 <- ggplot(full_df %>%
+                 dplyr::filter(period == "Dormant"),
+               aes(x = class, y = percent, fill = group)) +
+  geom_col(position = position_dodge()) +
+  geom_text(aes(label = label), vjust = 0.5, size = 2.5, 
+            position = position_dodge(width = 0.8)) +
+  scale_y_continuous(labels = percent_format(accuracy = 1),
+                     limits = c(-0.1, 1)) +
+  scale_fill_manual(
+    values = c(
+      "Experimental" = rgb(0.2, 0.2, 0.8, alpha = 0.8),
+      "Ungauged" = rgb(0.8, 0.2, 0.2, alpha = 0.8)
+    )
+  ) +
+  facet_wrap(~ region, scales = "free_x") +
+  labs(
+    title = "",
+    x = "",
+    y = "Percentage",
+    fill = "Catchment Type"
+  ) +
+  theme_bw(base_size = 9) +
+  theme(
+    plot.title =  element_text(size = 11, face = "bold"),
+    strip.text = element_text(face = "bold"),
+    axis.text.x = element_text(angle = 0, hjust = 1)
+  )
+
+plt2 <- ggplot(full_df %>%
+                 dplyr::filter(period == "Growing"),
+               aes(x = class, y = percent, fill = group)) +
+  geom_col(position = position_dodge()) +
+  geom_text(aes(label = label), vjust = 0.5, size = 2.5, 
+            position = position_dodge(width = 0.8)) +
+  scale_y_continuous(labels = percent_format(accuracy = 1),
+                     limits = c(-0.1, 1)) +
+  scale_fill_manual(
+    values = c(
+      "Experimental" = rgb(0.2, 0.2, 0.8, alpha = 0.8),
+      "Ungauged" = rgb(0.8, 0.2, 0.2, alpha = 0.8)
+    )
+  ) +
+  facet_wrap(~ region, scales = "free_x") +
+  labs(
+    title = "",
+    x = "Behavioral Class",
+    y = "Percentage",
+    fill = "Catchment Type"
+  ) +
+  theme_bw(base_size = 9) +
+  theme(
+    plot.title =  element_text(size = 11, face = "bold"),
+    strip.text = element_text(face = "bold"),
+    axis.text.x = element_text(angle = 0, hjust = 1)
+  )
+
+# plt <- plt1 / plt2 +
+#   plot_layout(guides = "collect")
+
+
+ggsave("final_figures_v3/REV Ungauged_Experimental_Comparison_Dormant.png", plt1,
+       width = 8, height = 5)
+
+ggsave("final_figures_v3/REV Ungauged_Experimental_Comparison_Growing.png", plt2,
+       width = 8, height = 5)
+
+
+
