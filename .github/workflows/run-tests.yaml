@@ -1,0 +1,44 @@
+name: Run R Unit Tests
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      # 1. Pull down your repository code
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      # 2. Install R onto the virtual computer
+      - name: Set up R
+        uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+
+      # 3. Cache packages so subsequent runs take seconds instead of minutes
+      - name: Set up R dependencies cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.R_LIBS_USER }}
+          key: ${{ runner.os }}-r-deps-${{ hashFiles('**/run-tests.yaml') }}
+          restore-keys: ${{ runner.os }}-r-deps-
+
+      # 4. Install the precise operational packages your script needs
+      - name: Install Dependencies
+        run: |
+          install.packages(c("remotes", "testthat", "tidyverse", "xgboost", "caret", "knitr"))
+        shell: Rscript {0}
+
+      # 5. Execute your testthat test runner
+      - name: Run Test Suite
+        run: |
+          testthat::test_dir("tests/testthat", stop_on_failure = TRUE)
+        shell: Rscript {0}
