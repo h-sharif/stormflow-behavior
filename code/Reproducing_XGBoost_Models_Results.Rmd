@@ -19,7 +19,6 @@ Following results can be reproduced with this document:
   
   4. Predicted behavioral classes for ungauged catchments in dormant and growing seasons.
 
-It should be noted that only the results with the best rained XGBoost model in dormant and growing seasons were reproduced here similar to the main text of the manuscript.
 
 ```{r get packages and data, include=FALSE}
 knitr::opts_chunk$set(echo = FALSE, message = FALSE,
@@ -282,38 +281,6 @@ ggplot() +
 
 ---
 
-```{r, fig.width=6, fig.height=5, fig.cap="Gauged Catchments Behavioral Classes Distribution in Dormant Season"}
-df_atts_gauged %>%
-  dplyr::select(c(dormant_gauged_class, dormant_predicted_class)) %>%
-  pivot_longer(cols = c(1, 2), names_to = "type", values_to = "class") %>%
-  mutate(type = ifelse(type == "dormant_gauged_class", "Gauged", "Predicted")) %>%
-  count(type, class) %>%
-  group_by(type) %>%
-  mutate(pct = n / sum(n)) %>%
-  ungroup() %>%
-  ggplot(aes(x = class, y = pct, fill = type)) +
-  geom_col(position = position_dodge(width = 0.9)) +
-  geom_text(
-    aes(label = n),
-    position = position_dodge(width = 0.9),
-    vjust = -0.5,
-    size = 3.5
-  ) +
-  scale_y_continuous(labels = percent_format(), expand = expansion(mult = c(0, 0.1)),
-                     limits = c(0, 1), breaks = seq(0, 1, 0.2),
-                     minor_breaks = seq(0, 1, 0.1)) +
-  labs(
-    x = "Behavioral Class in Dormant",
-    y = "Percentage (%)",
-    subtitle = "Total Number of Catchments with Gauged Behavioral Class in Dormant: 4306",
-    fill = ""
-  ) +
-  theme_bw() +
-  theme(legend.position = "bottom", legend.direction = "horizontal")
-```
-
----
-
 ### 1.1.2. Training and Test Sets Performance Metrics
 
 80% have been used for training, and 20% for test set.
@@ -367,9 +334,9 @@ bind_rows(
                  "All Complex")
     )
   ) %>%
+  dplyr::select(-c(num_samples)) %>%
   kable(
-    col.names = c("Set", "Class", "Number of Catchments",
-                  "Precision", "Specificity"),
+    col.names = c("Set", "Class", "Precision", "Specificity"),
     digits = 2,
     align = "lccc"
   )
@@ -465,40 +432,6 @@ ggplot() +
 
 ---
 
-```{r, fig.width=6, fig.height=5, fig.cap="Gauged Catchments Behavioral Classes Distribution in Growing Season"}
-df_atts_gauged %>%
-  drop_na(growing_gauged_class) %>%
-  dplyr::select(c(growing_gauged_class, growing_predicted_class)) %>%
-  pivot_longer(cols = c(1, 2), names_to = "type", values_to = "class") %>%
-  mutate(type = ifelse(type == "growing_gauged_class", "Gauged", "Predicted")) %>%
-  count(type, class) %>%
-  group_by(type) %>%
-  mutate(pct = n / sum(n)) %>%
-  ungroup() %>%
-  ggplot(aes(x = class, y = pct, fill = type)) +
-  geom_col(position = position_dodge(width = 0.9)) +
-  geom_text(
-    aes(label = n),
-    position = position_dodge(width = 0.9),
-    vjust = -0.5,
-    size = 3.5
-  ) +
-  scale_y_continuous(labels = percent_format(), expand = expansion(mult = c(0, 0.1)),
-                     limits = c(0, 1), breaks = seq(0, 1, 0.2),
-                     minor_breaks = seq(0, 1, 0.1)) +
-  labs(
-    x = "Behavioral Class in Growing",
-    y = "Percentage (%)",
-    subtitle = "Total Number of Catchments with Gauged Behavioral Class in Growing: 4205",
-    fill = ""
-  ) +
-  theme_bw() +
-  theme(legend.position = "bottom", legend.direction = "horizontal")
-```
-
-
----
-
 ### 1.2.2. Training and Test Sets Performance Metrics
 
 80% have been used for training, and 20% for test set.
@@ -554,9 +487,9 @@ bind_rows(
                  "All Complex")
     )
   ) %>%
+  dplyr::select(-c(num_samples)) %>%
   kable(
-    col.names = c("Set", "Class", "Number of Catchments",
-                  "Precision", "Specificity"),
+    col.names = c("Set", "Class", "Precision", "Specificity"),
     digits = 2,
     align = "lccc"
   )
@@ -646,7 +579,7 @@ df_atts_ungauged %>%
   labs(
     x = "Predicted Behavioral Class in Dormant",
     y = "Percentage (%)",
-    subtitle = "Total Number of Ungauged Catchments in Dormant Season: 75,585",
+    subtitle = "Total Number of Ungauged Catchments in Dormant Season: 77,585",
     fill = ""
   ) +
   theme_bw() +
@@ -963,7 +896,7 @@ df_atts_ungauged %>%
   labs(
     x = "Predicted Behavioral Class in Growing",
     y = "Percentage (%)",
-    subtitle = "Total Number of Ungauged Catchments in Growing Season: 75,583",
+    subtitle = "Total Number of Ungauged Catchments in Growing Season: 77,583",
     fill = ""
   ) +
   theme_bw() +
