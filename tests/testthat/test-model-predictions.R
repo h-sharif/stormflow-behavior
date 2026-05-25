@@ -36,11 +36,10 @@ test_that("Model simulations are structurally valid across all 4 spatial/tempora
     )
 
     # 2. Generate raw model predictions
-    raw_preds <- predict(scen$model, newdata = test_env$dmatrix)
-    predicted_matrix <- matrix(raw_preds, ncol = 3, byrow = TRUE)
+    raw_preds <- predict(scen$model, newdata = test_env$dmatrix, reshape = TRUE)
 
     # 3. Convert multi-class probability vectors into discrete 0, 1, 2 labels
-    predicted_labels <- max.col(predicted_matrix, ties.method = "first") - 1
+    predicted_labels <- max.col(raw_preds, ties.method = "first") - 1
 
     # 4. Calculate exact performance metrics
     mismatch_count <- sum(predicted_labels != test_env$labels)
