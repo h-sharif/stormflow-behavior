@@ -1,4 +1,4 @@
-name: Run R Unit Tests
+name: R Testthat Workflow
 
 on:
   push:
@@ -7,38 +7,33 @@ on:
     branches: [ main, master ]
 
 jobs:
-  test:
+  run-tests:
     runs-on: ubuntu-latest
     env:
-      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+      R_REMOTES_NO_ERRORS_FROM_WARNINGS: true
+      R_KEEP_PKG_SOURCE: yes
 
     steps:
-      # 1. Pull down your repository code
       - name: Check out repository
         uses: actions/checkout@v4
 
-      # 2. Install R onto the virtual computer
       - name: Set up R
         uses: r-lib/actions/setup-r@v2
         with:
-          use-public-rspm: true
+          r-version: 'release'
+          use-public-rspm: true # Installs fast, pre-compiled Linux binary packages
 
-      # 3. Cache packages so subsequent runs take seconds instead of minutes
-      - name: Set up R dependencies cache
-        uses: actions/cache@v4
+      # Automatically resolves, installs, and caches all requested R packages safely
+      - name: Install and Cache R Dependencies
+        uses: r-lib/actions/setup-r-dependencies@v2
         with:
-          path: ${{ env.R_LIBS_USER }}
-          key: ${{ runner.os }}-r-deps-${{ hashFiles('**/run-tests.yaml') }}
-          restore-keys: ${{ runner.os }}-r-deps-
+          packages: |
+            any::data.table
+            any::tidyverse
+            any::xgboost
+            any::caret
+            any::testthat
 
-      # 4. Install the precise operational packages your script needs
-      - name: Install Dependencies
+      - name: Execute Test Suite
         run: |
-          install.packages(c("remotes", "testthat", "tidyverse", "xgboost", "caret", "knitr"))
-        shell: Rscript {0}
-
-      # 5. Execute your testthat test runner
-      - name: Run Test Suite
-        run: |
-          testthat::test_dir("tests/testthat", stop_on_failure = TRUE)
-        shell: Rscript {0}
+          Rscript -e "testthat::test_dir('tests/testthat')"
