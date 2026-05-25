@@ -29,10 +29,12 @@ jobs:
         with:
           packages: |
             any::data.table
-            any::tidyverse
+            any::dplyr
+            any::tidyr
             any::xgboost
             any::caret
             any::testthat
+            any::here
 
       - name: Execute Test Suite
         run: |

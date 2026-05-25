@@ -61,10 +61,3 @@ prepare_test_matrix <- function(set, atts_df, selected_period, id_col, class_col
 
   return(list(dmatrix = dmatrix, labels = numeric_labels, features = features))
 }
-
-# evaluation
-# prepare_test_matrix(set = "ungauged",
-#                     atts_df = fread("data/Ungauged_Catchments_Metadata_and_Attributes.csv"),
-#                     selected_period = "dormant",
-#                     id_col = "UCIN",
-#                     class_col = "dormant_predicted_class")
