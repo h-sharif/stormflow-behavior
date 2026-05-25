@@ -44,9 +44,6 @@ jobs:
       - name: Update Live Badges in README
         if: success()
         run: |
-          # Inject repo details dynamically into the generated file path strings
-          sed -i "s|%s/%s|${{ github.repository }}|g" tests/live_badges.md
-          
           # Replace old anchors with the newly calculated badges
           sed -i '/<!-- START_BADGES -->/,/<!-- END_BADGES -->/{//!d}' README.md
           sed -i '/<!-- START_BADGES -->/r tests/live_badges.md' README.md
