@@ -31,8 +31,8 @@ jobs:
             any::data.table
             any::dplyr
             any::tidyr
-            any::xgboost
-            any::caret
+            deps::xgboost@1.7.9-1
+            deps::caret@7.0-1
             any::testthat
             any::here
 

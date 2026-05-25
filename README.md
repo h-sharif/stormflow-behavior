@@ -15,7 +15,7 @@ Using R version 4.4.2 on an Apple M3 with 8 GB memory and Sonoma 14.6.1 macOS, i
 * data.table 1.17.2
 * here 1.0.2
 * tidyverse 2.0.0
-* xgboost 1.7.11.1
+* xgboost 1.7.9.1
 * caret 7.0-1
 * knitr 1.50
 * countrycode 1.6.1

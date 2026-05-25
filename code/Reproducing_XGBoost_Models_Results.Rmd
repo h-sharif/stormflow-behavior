@@ -187,10 +187,8 @@ calculate_class_metrics <- function(conf_matrix, class_index) {
 
 eval_metrics_exe <- function(model, dmatrix, obs_labels) {
   # Predict on the test set
-  pred <- predict(model, newdata = dmatrix)
-  pred_labels <- max.col(matrix(pred,
-                                ncol = 3,
-                                byrow = TRUE)) - 1
+  pred <- predict(model, newdata = dmatrix, reshape = TRUE)
+  pred_labels <- max.col(pred) - 1
   
   conf_mat <- confusionMatrix(ordered(pred_labels, levels = c(0, 1, 2)),
                               ordered(as.numeric(obs_labels) - 1, 
