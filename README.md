@@ -1,6 +1,7 @@
 # Reproducible Code for "The Functional Diversity of Ungauged Basins: A global Hydrological Synthesis"
 
 <!-- START_BADGES -->
+![CI Status](https://github.com) ![Test Pass Rate](https://shields.io)
 <!-- END_BADGES -->
 
 This research article is currently submitted to a scientific journal and is under review.
