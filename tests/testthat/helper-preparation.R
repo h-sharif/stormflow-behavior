@@ -2,14 +2,14 @@
 prepare_test_matrix <- function(set, atts_df, selected_period, id_col, class_col) {
   if (set == "gauged") {
     processed <- atts_df %>%
-      filter(!Catchment_Boundary_Flagged,
-             !is.na(.data[[class_col]]) | .data[[class_col]] == "") %>% # needed for growing season
+      filter(!Catchment_Boundary_Flagged) %>%
       rename(CTI = `Async Index x Slope/AI`,
              `CTIW-dormant` = `RW1 x Async Index x Slope/AI-dormant`,
              `CTIW-growing` = `RW1 x Async Index x Slope/AI-growing`) %>%
       pivot_longer(cols = c(`RW1-dormant`:`RW5-growing`, `CTIW-dormant`, `CTIW-growing`),
                    names_to = c("var", "period"), values_to = "val",
                    names_sep = "-") %>%
+      dplyr::filter(period == selected_period) %>%
       pivot_wider(names_from = var, values_from = val) %>%
       dplyr::select(
         all_of(
@@ -25,14 +25,16 @@ prepare_test_matrix <- function(set, atts_df, selected_period, id_col, class_col
       )
   } else {
     processed <- atts_df %>%
-      filter(!is.na(.data[[class_col]]) | .data[[class_col]] == "") %>% # needed for growing season
       rename(CTI = `Async Index x Slope/AI`,
              `CTIW-dormant` = `RW1 x Async Index x Slope/AI-dormant`,
              `CTIW-growing` = `RW1 x Async Index x Slope/AI-growing`) %>%
       pivot_longer(cols = c(`RW1-dormant`:`RW5-growing`, `CTIW-dormant`, `CTIW-growing`),
                    names_to = c("var", "period"), values_to = "val",
                    names_sep = "-") %>%
+      dplyr::filter(period == selected_period) %>%
       pivot_wider(names_from = var, values_from = val) %>%
+      drop_na(RW1) %>% # wetness ratios in growing seasons are not available for two catchments in Australia
+      # This is because no dominantly growing month existed for them.
       dplyr::select(
         all_of(
           c("period", id_col, "AI", "RW1", "RW2.5", "RW5", "Area", "Async Index",
@@ -61,7 +63,8 @@ prepare_test_matrix <- function(set, atts_df, selected_period, id_col, class_col
 }
 
 # evaluation
-# prepare_test_matrix(atts_df = fread("data/Gauged_Catchments_Metadata_and_Attributes.csv"),
+# prepare_test_matrix(set = "ungauged",
+#                     atts_df = fread("data/Ungauged_Catchments_Metadata_and_Attributes.csv"),
 #                     selected_period = "dormant",
-#                     id_col = "GCIN",
+#                     id_col = "UCIN",
 #                     class_col = "dormant_predicted_class")
