@@ -31,8 +31,8 @@ jobs:
             any::data.table
             any::dplyr
             any::tidyr
-            cran::xgboost@1.7.9.1
-            cran::caret@7.0-1
+            any::xgboost
+            any::caret
             any::testthat
             any::here
 
