@@ -6,8 +6,8 @@ library(testthat)
 
 df_atts_gauged   <- fread("../../data/Gauged_Catchments_Metadata_and_Attributes.csv")
 df_atts_ungauged <- fread("../../data/Ungauged_Catchments_Metadata_and_Attributes.csv")
-dormant_model <- xgb.load("../../code/models/dormant_model")
-growing_model <- xgb.load("../../code/models/growing_model")
+dormant_model <- xgb.load("../../code/models/dormant_model.json")
+growing_model <- xgb.load("../../code/models/growing_model.json")
 
 test_that("Model simulations are structurally valid across all 4 spatial/temporal strata", {
 
