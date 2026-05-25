@@ -25,5 +25,6 @@ Using R version 4.4.2 on an Apple M3 with 8 GB memory and Sonoma 14.6.1 macOS, i
 * scales 1.3.0
 * ggthemes 5.1.0
 * rnaturalearth 1.0.1
+* rnaturalearthhires 1.0.0.9000
 
 This repository can be cloned and executed with a local installation of R and the required packages noted above.
