@@ -31,11 +31,31 @@ jobs:
             any::data.table
             any::dplyr
             any::tidyr
-            deps::xgboost@1.7.9-1
-            deps::caret@7.0-1
+            cran::xgboost@1.7.9.1
+            cran::caret@7.0-1
             any::testthat
             any::here
 
       - name: Execute Test Suite
         run: |
           Rscript -e "testthat::test_dir('tests/testthat')"
+
+      # Strips out old badge contents and reads the fresh passing metrics
+      - name: Update Live Badges in README
+        if: success()
+        run: |
+          # Inject repo details dynamically into the generated file path strings
+          sed -i "s|%s/%s|${{ github.repository }}|g" tests/live_badges.md
+          
+          # Replace old anchors with the newly calculated badges
+          sed -i '/<!-- START_BADGES -->/,/<!-- END_BADGES -->/{//!d}' README.md
+          sed -i '/<!-- START_BADGES -->/r tests/live_badges.md' README.md
+
+      # Pushes changes safely back to the default branch without triggering infinite loop builds
+      - name: Commit Badge Updates
+        if: success()
+        run: |
+          git config --local user.email "github-actions[bot]@://github.com"
+          git config --local user.name "github-actions[bot]"
+          git add README.md
+          git diff --quiet && git diff --staged --quiet || (git commit -m "chore: update test pass badges [skip ci]" && git push)

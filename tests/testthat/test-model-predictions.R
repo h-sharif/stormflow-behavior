@@ -95,6 +95,24 @@ test_that("Model simulations are structurally valid across all 4 spatial/tempora
 
   # Write out the file for GitHub Actions to read
   writeLines(md_table, here::here("tests/metrics.md"))
+
+  # Calculate global accuracy across all evaluation strata combined
+  global_mismatches <- sum(metrics_summary$Mismatches)
+  global_total      <- sum(metrics_summary$Total)
+  global_pass_rate  <- (1 - (global_mismatches / global_total)) * 100
+
+  # Select a badge color based on accuracy performance
+  badge_color <- if (global_pass_rate >= 99.9) "brightgreen" else if (global_pass_rate >= 95.0) "yellow" else "red"
+
+  # Generate markdown syntax for the green light status logo and the dynamic percentage badge
+  badge_markdown <- sprintf(
+    "![CI Status](https://github.com) ![Test Pass Rate](https://shields.io)",
+    global_pass_rate, badge_color
+  )
+
+  # Save out a clean snippet for the GitHub Actions runner environment to capture
+  writeLines(badge_markdown, here::here("tests/live_badges.md"))
+
   succeed()
 
 })

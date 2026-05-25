@@ -1,5 +1,8 @@
 # Reproducible Code for "The Functional Diversity of Ungauged Basins: A global Hydrological Synthesis"
 
+<!-- START_BADGES -->
+<!-- END_BADGES -->
+
 This research article is currently submitted to a scientific journal and is under review.
 
 This Repo contains the following items:
@@ -28,6 +31,3 @@ Using R version 4.4.2 on an Apple M3 with 8 GB memory and Sonoma 14.6.1 macOS, i
 * rnaturalearthhires 1.0.0.9000
 
 This repository can be cloned and executed with a local installation of R and the required packages noted above.
-
-<!-- START_METRICS_TABLE -->
-<!-- END_METRICS_TABLE -->
