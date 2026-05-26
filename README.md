@@ -1,7 +1,7 @@
 # Reproducible Code for "The Functional Diversity of Ungauged Basins: A global Hydrological Synthesis"
 
 <!-- START_BADGES -->
-[![CI Status](https://github.com/h-sharif/stormflow-behavior/actions/workflows/run-tests.yml/badge.svg)](https://github.com/h-sharif/stormflow-behavior/actions) [![Test Pass Rate](https://img.shields.io/badge/pass%20rate-100.00%25-brightgreen)](https://github.com/h-sharif/stormflow-behavior/actions)
+[![CI Status](https://github.com/h-sharif/stormflow-behavior/actions/workflows/run-tests.yaml/badge.svg)](https://github.com/h-sharif/stormflow-behavior/actions) [![Test Pass Rate](https://img.shields.io/badge/pass%20rate-100.00%25-brightgreen)](https://github.com/h-sharif/stormflow-behavior/actions)
 <!-- END_BADGES -->
 
 This research article is currently submitted to a scientific journal and is under review.
