@@ -106,7 +106,7 @@ test_that("Model simulations are structurally valid across all 4 spatial/tempora
 
   # Generate markdown syntax for the green light status logo and the dynamic percentage badge
   badge_markdown <- sprintf(
-    "[![CI Status](https://github.com/h-sharif/stormflow-behavior/actions/workflows/run-tests.yml/badge.svg)](https://github.com/h-sharif/stormflow-behavior/actions) [![Test Pass Rate](https://img.shields.io/badge/pass%%20rate-%s%%25-%s)](https://github.com/h-sharif/stormflow-behavior/actions)",
+    "[![CI Status](https://github.com/h-sharif/stormflow-behavior/actions/workflows/run-tests.yaml/badge.svg)](https://github.com/h-sharif/stormflow-behavior/actions) [![Test Pass Rate](https://img.shields.io/badge/pass%%20rate-%s%%25-%s)](https://github.com/h-sharif/stormflow-behavior/actions)",
     sprintf("%.2f", global_pass_rate), badge_color
   )
 
