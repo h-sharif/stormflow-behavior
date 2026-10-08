@@ -38,6 +38,8 @@ library(sf)
 library(scales)
 library(ggthemes)
 library(rnaturalearth)
+library(httr)
+library(jsonlite)
 
 # Test and Training IDs for dormant and growing trained models -----------------
 load(here("data", "Training_IDs.RData"))
@@ -171,8 +173,8 @@ xgboost_ungauged_atts <- df_atts_ungauged %>%
 # as well as all samples
 calculate_class_metrics <- function(conf_matrix, class_index) {
   true_positives <- conf_matrix[class_index, class_index]
-  false_positives <- sum(conf_matrix[, class_index]) - true_positives
-  false_negatives <- sum(conf_matrix[class_index, ]) - true_positives
+  false_positives <- sum(conf_matrix[class_index, ]) - true_positives
+  false_negatives <- sum(conf_matrix[, class_index]) - true_positives
   true_negatives <- sum(conf_matrix) - 
     (true_positives + false_positives + false_negatives)
   
@@ -187,8 +189,10 @@ calculate_class_metrics <- function(conf_matrix, class_index) {
 
 eval_metrics_exe <- function(model, dmatrix, obs_labels) {
   # Predict on the test set
-  pred <- predict(model, newdata = dmatrix, reshape = TRUE)
-  pred_labels <- max.col(pred) - 1
+  pred <- predict(model, newdata = dmatrix)
+  pred_labels <- max.col(matrix(pred,
+                                ncol = 3,
+                                byrow = TRUE)) - 1
   
   conf_mat <- confusionMatrix(ordered(pred_labels, levels = c(0, 1, 2)),
                               ordered(as.numeric(obs_labels) - 1, 
@@ -224,6 +228,11 @@ eval_metrics_exe <- function(model, dmatrix, obs_labels) {
                     performances_complex$precision,
                     performances_noncomplex$precision,
                     performances_complex_adj$precision),
+      recall = c(performances_simple$recall,
+                 performances_intermediate$recall,
+                 performances_complex$recall,
+                 performances_noncomplex$recall,
+                 performances_complex_adj$recall),
       specificity = c(performances_simple$specificity,
                       performances_intermediate$specificity,
                       performances_complex$specificity,
@@ -233,6 +242,74 @@ eval_metrics_exe <- function(model, dmatrix, obs_labels) {
   )
 }
 ```
+
+```{r, message=FALSE}
+# Compare version 2 with version 1 results
+response <- GET("https://api.github.com/repos/h-sharif/stormflow-behavior/releases/tags/v1.0.0",
+                add_headers(Accept = "application/vnd.github+json"))
+release_data <- fromJSON(content(response, "text", encoding = "UTF-8"))
+asset <- release_data$assets[release_data$assets$name == "Ungauged_Catchments_Predicted_Behavioral_Classes_V1.csv", ]
+download_url <- asset$browser_download_url
+df_preds_ungauged_v1 <- fread(download_url)
+
+# % of changes -----------------------------------------------------------------
+total_area_ungauged <- sum(df_atts_ungauged$Area) / 1e6 # M km2
+total_num <- nrow(df_atts_ungauged)
+df_change <- df_preds_ungauged_v1 %>%
+  left_join(df_atts_ungauged %>% dplyr::select(c(UCIN, Area)), by = "UCIN") %>%
+  pivot_longer(cols = c(dormant_predicted_class, growing_predicted_class),
+               names_to = "period", values_to = "predicted_class") %>%
+  mutate(period = ifelse(period == "dormant_predicted_class", "Dormant", "Growing")) %>%
+  # growing season was not identified for two catchments in Australia
+  dplyr::filter(predicted_class != "") %>%
+  group_by(period, predicted_class) %>%
+  summarise(num_catchs_v1 = n(),
+            total_area_v1 = sum(Area) / 1e6,
+            .groups = "drop") %>%
+  mutate(area_pct_v1 = 100 * total_area_v1 / total_area_ungauged) %>%
+  left_join(
+    df_atts_ungauged %>%
+      dplyr::select(c(UCIN, Area, dormant_predicted_class, 
+                      growing_predicted_class)) %>%
+      pivot_longer(cols = c(dormant_predicted_class, growing_predicted_class),
+                   names_to = "period", values_to = "predicted_class") %>%
+      mutate(period = ifelse(period == "dormant_predicted_class", "Dormant", "Growing")) %>%
+      # growing season was not identified for two catchments in Australia
+      drop_na(predicted_class) %>%
+      group_by(period, predicted_class) %>%
+      summarise(num_catchs_v2 = n(),
+                total_area_v2 = sum(Area) / 1e6,
+                .groups = "drop") %>%
+      mutate(area_pct_v2 = 100 * total_area_v2 / total_area_ungauged),
+    by = c("period", "predicted_class")
+  ) %>%
+  mutate(
+    num_change_perc = 100 * (num_catchs_v2 - num_catchs_v1) / total_num,
+    area_change_perc = area_pct_v2 - area_pct_v1
+  )
+```
+
+> This document presents version 2 results from newly trained XGBoost models. In the previous version, model performance was evaluated with two statistical metrics. In version 2, performance is evaluated with three metrics. Predicted behavioral classes for ungauged catchments in both seasons changed only slightly compared to the previous version, as summarized in the table below.
+
+```{r}
+df_change %>%
+  mutate(predicted_class = tools::toTitleCase(as.character(predicted_class)),
+         predicted_class = ordered(predicted_class,
+                                   levels = c("Simple", "Intermediate",
+                                              "Complex"))) %>%
+  dplyr::select(period, predicted_class, num_change_perc, area_change_perc) %>%
+  kable(
+    digits = 2,
+    col.names = c("Period",
+                  "Behavioral Class",
+                  "$\\Delta\\,Percentage\\,of\\,Number\\,of\\,Catchments$", 
+                  "$\\Delta\\,Percentage\\,of\\,Total\\,Area\\,out\\,of\\,Total\\,Ungauged\\,Evaluated\\,Area$"),
+    caption = "Changes Across Predicted Behavioral Classes for Ungauged Catchments (Version 2 -  Version 1)",
+    align = "lccc"
+  )
+```
+
+---
 
 # 1. Gauged Catchments
 
@@ -334,9 +411,9 @@ bind_rows(
   ) %>%
   dplyr::select(-c(num_samples)) %>%
   kable(
-    col.names = c("Set", "Class", "Precision", "Specificity"),
+    col.names = c("Set", "Class", "Precision", "Recall", "Specificity"),
     digits = 2,
-    align = "lccc"
+    align = "lcccc"
   )
 ```
 
@@ -390,9 +467,9 @@ result_regions_df %>%
     ) %>%
   kable(
     col.names = c("Region", "Class", "Number of Catchments",
-                  "Precision", "Specificity"),
+                  "Precision", "Recall", "Specificity"),
     digits = 2,
-    align = "lccc"
+    align = "lcccc"
   )
 ```
 
@@ -487,9 +564,9 @@ bind_rows(
   ) %>%
   dplyr::select(-c(num_samples)) %>%
   kable(
-    col.names = c("Set", "Class", "Precision", "Specificity"),
+    col.names = c("Set", "Class", "Precision", "Recall", "Specificity"),
     digits = 2,
-    align = "lccc"
+    align = "lcccc"
   )
 ```
 
@@ -544,9 +621,9 @@ result_regions_df %>%
     ) %>%
   kable(
     col.names = c("Region", "Class", "Number of Catchments",
-                  "Precision", "Specificity"),
+                  "Precision", "Recall", "Specificity"),
     digits = 2,
-    align = "lccc"
+    align = "lcccc"
   )
 ```
 
@@ -556,7 +633,7 @@ result_regions_df %>%
 
 # 2. Ungauged Catchments
 
-Here, static map of predicted behavioral classes for ungauged catchments are reproduced. An interactive map of predicted behavioral classes for ungauged catchments were also developed that can be accessed via the following URL: https://h-sharif.github.io/stormflow-behavior/
+Here, static map of predicted behavioral classes for ungauged catchments are reproduced. 
 
 ## 2.1. Predicted Behavioral Classes in Dormant Seasons
 
@@ -656,25 +733,6 @@ ggplot() +
 
 ---
 
-```{r}
-sf_obj %>%
-  st_drop_geometry() %>%
-  group_by(dormant_predicted_class) %>%
-  summarise(
-    n = n(),
-    area = round(sum(Area)/1e6, digits = 3),
-    .groups ="drop"
-  ) %>%
-  kable(
-    col.names = c("Predicted Behavioral Class", "Number of Catchments", "$Area\\,(10^6\\,km^2)$"),
-    caption = "Canada (BC) and Salish Sea Region in Dormant Season",
-    align = "lcc"
-  )
-```
-
-
----
-
 
 ### 2.1.2. Europe
 
@@ -721,25 +779,6 @@ ggplot() +
   coord_sf(xlim = c(sf_bbox["xmin"], sf_bbox["xmax"]), 
            ylim = c(sf_bbox["ymin"], sf_bbox["ymax"]), 
            expand = TRUE)
-```
-
-
----
-
-```{r}
-sf_obj %>%
-  st_drop_geometry() %>%
-  group_by(dormant_predicted_class) %>%
-  summarise(
-    n = n(),
-    area = round(sum(Area)/1e6, digits = 3),
-    .groups ="drop"
-  ) %>%
-  kable(
-    col.names = c("Predicted Behavioral Class", "Number of Catchments", "$Area\\,(10^6\\,km^2)$"),
-    caption = "Europe in Dormant Season",
-    align = "lcc"
-  )
 ```
 
 
@@ -794,28 +833,9 @@ ggplot() +
 
 ---
 
-```{r}
-sf_obj %>%
-  st_drop_geometry() %>%
-  group_by(dormant_predicted_class) %>%
-  summarise(
-    n = n(),
-    area = round(sum(Area)/1e6, digits = 3),
-    .groups ="drop"
-  ) %>%
-  kable(
-    col.names = c("Predicted Behavioral Class", "Number of Catchments", "$Area\\,(10^6\\,km^2)$"),
-    caption = "Latin America in Dormant Season",
-    align = "lcc"
-  )
-```
-
-
----
-
 ### 2.1.4. Australia
 
-```{r, fig.width=7, fig.height=5, fig.cap="Predicted Behavioral Classes for Ungauged Catchments in Austrila and New Zealand in Dormant Season"}
+```{r, fig.width=7, fig.height=5, fig.cap="Predicted Behavioral Classes for Ungauged Catchments in Austarila and New Zealand in Dormant Season"}
 nz_borders <- ne_countries(scale = "medium", country = "New Zealand", returnclass = "sf")
 aus_states <- ne_states(country = "Australia", returnclass = "sf")
 
@@ -856,23 +876,6 @@ ggplot() +
 
 ---
 
-```{r}
-sf_obj %>%
-  st_drop_geometry() %>%
-  group_by(dormant_predicted_class) %>%
-  summarise(
-    n = n(),
-    area = round(sum(Area)/1e6, digits = 3),
-    .groups ="drop"
-  ) %>%
-  kable(
-    col.names = c("Predicted Behavioral Class", "Number of Catchments", "$Area\\,(10^6\\,km^2)$"),
-    caption = "Oceania in Dormant Season",
-    align = "lcc"
-  )
-```
-
----
 
 ## 2.2. Predicted Behavioral Classes in Growing Seasons
 
@@ -973,24 +976,6 @@ ggplot() +
 
 ---
 
-```{r}
-sf_obj %>%
-  st_drop_geometry() %>%
-  group_by(growing_predicted_class) %>%
-  summarise(
-    n = n(),
-    area = round(sum(Area)/1e6, digits = 3),
-    .groups ="drop"
-  ) %>%
-  kable(
-    col.names = c("Predicted Behavioral Class", "Number of Catchments", "$Area\\,(10^6\\,km^2)$"),
-    caption = "Canada (BC) and Salish Sea Region in Growing Season",
-    align = "lcc"
-  )
-```
-
----
-
 ### 2.2.2. Europe
 
 ```{r, fig.width=8, fig.height=6.5, fig.cap="Predicted Behavioral Classes for Ungauged Catchments in Europe in Growing Season"}
@@ -1037,26 +1022,6 @@ ggplot() +
            ylim = c(sf_bbox["ymin"], sf_bbox["ymax"]), 
            expand = TRUE)
 ```
-
----
-
-
-```{r}
-sf_obj %>%
-  st_drop_geometry() %>%
-  group_by(growing_predicted_class) %>%
-  summarise(
-    n = n(),
-    area = round(sum(Area)/1e6, digits = 3),
-    .groups ="drop"
-  ) %>%
-  kable(
-    col.names = c("Predicted Behavioral Class", "Number of Catchments", "$Area\\,(10^6\\,km^2)$"),
-    caption = "Europe in Growing Season",
-    align = "lcc"
-  )
-```
-
 
 ---
 
@@ -1108,34 +1073,15 @@ ggplot() +
 
 ---
 
-
-```{r}
-sf_obj %>%
-  st_drop_geometry() %>%
-  group_by(growing_predicted_class) %>%
-  summarise(
-    n = n(),
-    area = round(sum(Area)/1e6, digits = 3),
-    .groups ="drop"
-  ) %>%
-  kable(
-    col.names = c("Predicted Behavioral Class", "Number of Catchments", "$Area\\,(10^6\\,km^2)$"),
-    caption = "Latin America in Growing Season",
-    align = "lcc"
-  )
-```
-
-
----
-
 ### 2.2.4. Australia
 
-```{r, fig.width=7, fig.height=5, fig.cap="Predicted Behavioral Classes for Ungauged Catchments in Austrila and New Zealand in Growing Season"}
+```{r, fig.width=7, fig.height=5, fig.cap="Predicted Behavioral Classes for Ungauged Catchments in Australia and New Zealand in Growing Season"}
 nz_borders <- ne_countries(scale = "medium", country = "New Zealand", returnclass = "sf")
 aus_states <- ne_states(country = "Australia", returnclass = "sf")
 
 sf_obj <- df_atts_ungauged %>%
-  drop_na(growing_predicted_class) %>% # growing dormancy info were not available for two catchments in AUS
+  # growing season was not identified for two catchments in Australia
+  drop_na(growing_predicted_class) %>%
   mutate(continent = countrycode(country, origin = "iso2c", destination = "continent"))  %>%
   dplyr::filter(continent == "Oceania") %>%
   st_as_sf(coords = c("longitude", "latitude"), crs = 4326)
@@ -1169,24 +1115,7 @@ ggplot() +
            expand = TRUE)
 ```
 
----
-
-
-```{r}
-sf_obj %>%
-  st_drop_geometry() %>%
-  group_by(growing_predicted_class) %>%
-  summarise(
-    n = n(),
-    area = round(sum(Area)/1e6, digits = 3),
-    .groups ="drop"
-  ) %>%
-  kable(
-    col.names = c("Predicted Behavioral Class", "Number of Catchments", "$Area\\,(10^6\\,km^2)$"),
-    caption = "Oceania in Growing Season",
-    align = "lcc"
-  )
-```
-
 
 ---
+
+
