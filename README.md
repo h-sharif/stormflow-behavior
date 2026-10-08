@@ -34,5 +34,7 @@ Using R version 4.4.2 on an Apple M3 with 8 GB memory and Sonoma 14.6.1 macOS, i
 * ggthemes 5.1.0
 * rnaturalearth 1.0.1
 * rnaturalearthhires 1.0.0.9000
+* httr 1.4.8
+* jsonlite 2.0.0
 
 This repository can be cloned and executed with a local installation of R and the required packages noted above.
