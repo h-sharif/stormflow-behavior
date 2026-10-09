@@ -7,7 +7,7 @@
 Paper: https://doi.org/10.1038/s44221-026-00699-6
 
 Versions
-- Version 2 (October 2026): newly trained XGBoost models, evaluated with three statistical metrics. Predicted classes for ungauged catchments differ in a very small subset of catchments compared to version 1; see the summary table at the top of the version 2 report.
+- Version 2 (October 2026): newly trained XGBoost models, evaluated with three statistical metrics. Predicted classes proportions for ungauged catchments do change only slightly compared to version 1; see the summary table at the top of the version 2 report.
 - Version 1 (July 2026): previous version of the models, available under release v1.0.
 
 This Repository contains the following items:
