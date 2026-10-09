@@ -1,0 +1,1 @@
+[![CI Status](https://github.com/h-sharif/stormflow-behavior/actions/workflows/run-tests.yaml/badge.svg)](https://github.com/h-sharif/stormflow-behavior/actions) [![Test Pass Rate](https://img.shields.io/badge/pass%20rate-100.00%25-brightgreen)](https://github.com/h-sharif/stormflow-behavior/actions)
