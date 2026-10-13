@@ -171,8 +171,8 @@ xgboost_ungauged_atts <- df_atts_ungauged %>%
 # as well as all samples
 calculate_class_metrics <- function(conf_matrix, class_index) {
   true_positives <- conf_matrix[class_index, class_index]
-  false_positives <- sum(conf_matrix[, class_index]) - true_positives
-  false_negatives <- sum(conf_matrix[class_index, ]) - true_positives
+  false_positives <- sum(conf_matrix[class_index, ]) - true_positives
+  false_negatives <- sum(conf_matrix[, class_index]) - true_positives
   true_negatives <- sum(conf_matrix) - 
     (true_positives + false_positives + false_negatives)
   
@@ -180,9 +180,11 @@ calculate_class_metrics <- function(conf_matrix, class_index) {
   recall <- true_positives / (true_positives + false_negatives)
   specificity <- true_negatives / (true_negatives + false_positives)
   f1_score <- 2 * (precision * recall) / (precision + recall)
+  npv <- true_negatives / (true_negatives + false_negatives)
   
   list(precision = precision, recall = recall,
-       specificity = specificity, f1_score = f1_score)
+       specificity = specificity, f1_score = f1_score,
+       npv = npv)
 }
 
 eval_metrics_exe <- function(model, dmatrix, obs_labels) {
@@ -224,11 +226,21 @@ eval_metrics_exe <- function(model, dmatrix, obs_labels) {
                     performances_complex$precision,
                     performances_noncomplex$precision,
                     performances_complex_adj$precision),
+      recall = c(performances_simple$recall,
+                 performances_intermediate$recall,
+                 performances_complex$recall,
+                 performances_noncomplex$recall,
+                 performances_complex_adj$recall),
       specificity = c(performances_simple$specificity,
                       performances_intermediate$specificity,
                       performances_complex$specificity,
                       performances_noncomplex$specificity,
-                      performances_complex_adj$specificity)
+                      performances_complex_adj$specificity),
+      npv = c(performances_simple$npv,
+              performances_intermediate$npv,
+              performances_complex$npv,
+              performances_noncomplex$npv,
+              performances_complex_adj$npv)
     )
   )
 }
@@ -334,9 +346,10 @@ bind_rows(
   ) %>%
   dplyr::select(-c(num_samples)) %>%
   kable(
-    col.names = c("Set", "Class", "Precision", "Specificity"),
+    col.names = c("Set", "Class", "Precision", "Recall", "Specificity",
+                  "NPV"),
     digits = 2,
-    align = "lccc"
+    align = "lccccc"
   )
 ```
 
@@ -390,9 +403,9 @@ result_regions_df %>%
     ) %>%
   kable(
     col.names = c("Region", "Class", "Number of Catchments",
-                  "Precision", "Specificity"),
+                  "Precision", "Recall", "Specificity", "NPV"),
     digits = 2,
-    align = "lccc"
+    align = "lccccc"
   )
 ```
 
@@ -487,9 +500,10 @@ bind_rows(
   ) %>%
   dplyr::select(-c(num_samples)) %>%
   kable(
-    col.names = c("Set", "Class", "Precision", "Specificity"),
+    col.names = c("Set", "Class", "Precision", "Recall", "Specificity",
+                  "NPV"),
     digits = 2,
-    align = "lccc"
+    align = "lccccc"
   )
 ```
 
@@ -544,9 +558,9 @@ result_regions_df %>%
     ) %>%
   kable(
     col.names = c("Region", "Class", "Number of Catchments",
-                  "Precision", "Specificity"),
+                  "Precision", "Recall", "Specificity", "NPV"),
     digits = 2,
-    align = "lccc"
+    align = "lccccc"
   )
 ```
 
