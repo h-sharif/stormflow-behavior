@@ -7,4 +7,4 @@
 | **dormant_ungauged** | 77585 | 1 | 0.0013% | 100.00% |
 | **growing_ungauged** | 77583 | 0 | 0.0000% | 100.00% |
 
-*Last updated: 2026-10-13 22:12:44.422073 UTC*
+*Last updated: 2026-10-13 23:54:14.049185 UTC*
