@@ -7,7 +7,7 @@
 Paper: https://doi.org/10.1038/s44221-026-00699-6
 
 ## Development Branch
-This branch contains models retained in October 2026 for future development. They are not used in the published article. The models and results of the published article are on the main branch and in release v1.0.0.
+This branch contains models retrained in October 2026 for future development. They are not used in the published article. The models and results of the published article are on the main branch and in release v1.0.0.
 
 This Repository contains the following items:
 
