@@ -252,6 +252,29 @@ eval_metrics_exe <- function(model, dmatrix, obs_labels) {
 gauged_sf <- df_atts_gauged %>%
   st_as_sf(coords = c("longitude", "latitude"), crs = 4326) %>%
   st_transform(3857)
+
+dormant_prevalnce <- df_atts_gauged %>%
+  rename(behavioral_class = dormant_gauged_class) %>%
+  count(behavioral_class) %>% mutate(pct = n / sum(n)) %>%
+  mutate(
+    behavioral_class = as.character(behavioral_class),
+    behavioral_class = paste0(
+      toupper(substr(behavioral_class, 1, 1)),
+      substr(behavioral_class, 2, nchar(behavioral_class))
+    )
+  ) %>%
+  dplyr::select(-n)
+dormant_prevalnce <- dormant_prevalnce %>%
+  bind_rows(
+    data.frame(
+      behavioral_class = c("All Non-Complex", "All Complex"),
+      pct = c(
+        dormant_prevalnce$pct[which(dormant_prevalnce$behavioral_class == "Simple")] +
+          dormant_prevalnce$pct[which(dormant_prevalnce$behavioral_class == "Intermediate")],
+        dormant_prevalnce$pct[which(dormant_prevalnce$behavioral_class == "Complex")]
+      )
+    )
+  )
 ```
 
 ## 1.1. Dormant Season
@@ -299,6 +322,8 @@ Number of test set catchments: `r nrow(df_atts_gauged) - length(training_ids_dor
 
 Number of training set catchments: `r length(training_ids_dormant)`
 
+Because precision depends on class prevalence, which equals the precision expected without skill, precision for exceptionally rare classes such as the simple class should be judged against prevalence, with values an order of magnitude or more above it indicating skill well above chance.
+
 ```{r}
 # Preparing Training Set
 trainData <- xgboost_gauged_atts %>%
@@ -337,6 +362,9 @@ bind_rows(
     mutate(Set = "Test") %>%
     relocate(Set)
 ) %>%
+  left_join(
+    dormant_prevalnce, by = "behavioral_class"
+  ) %>%
   mutate(
     behavioral_class = ordered(
       behavioral_class,
@@ -347,9 +375,10 @@ bind_rows(
   dplyr::select(-c(num_samples)) %>%
   kable(
     col.names = c("Set", "Class", "Precision", "Recall", "Specificity",
-                  "NPV"),
+                  "NPV", "Prevalence"),
     digits = 2,
-    align = "lccccc"
+    align = "lcccccc",
+    caption = "Prevalence is estimated across all gauged catchments."
   )
 ```
 
@@ -414,6 +443,33 @@ result_regions_df %>%
 
 ## 1.2. Growing Season
 
+```{r}
+growing_prevalnce <- df_atts_gauged %>%
+  drop_na(growing_gauged_class) %>%
+  rename(behavioral_class = growing_gauged_class) %>%
+  count(behavioral_class) %>% mutate(pct = n / sum(n)) %>%
+  mutate(
+    behavioral_class = as.character(behavioral_class),
+    behavioral_class = paste0(
+      toupper(substr(behavioral_class, 1, 1)),
+      substr(behavioral_class, 2, nchar(behavioral_class))
+    )
+  ) %>%
+  dplyr::select(-n)
+growing_prevalnce <- growing_prevalnce %>%
+  bind_rows(
+    data.frame(
+      behavioral_class = c("All Non-Complex", "All Complex"),
+      pct = c(
+        growing_prevalnce$pct[which(growing_prevalnce$behavioral_class == "Simple")] +
+          growing_prevalnce$pct[which(growing_prevalnce$behavioral_class == "Intermediate")],
+        growing_prevalnce$pct[which(growing_prevalnce$behavioral_class == "Complex")]
+      )
+    )
+  )
+```
+
+
 ### 1.2.1. Gauged Behavioral Classes
 
 ```{r, fig.width=7, fig.height=3.5, fig.cap="Gauged Catchments Behavioral Classes in Growing Season"}
@@ -450,6 +506,9 @@ ggplot() +
 Number of test set catchments: `r nrow(df_atts_gauged %>% dplyr::filter(!is.na(growing_gauged_class))) - length(training_ids_growing)`
 
 Number of training set catchments: `r length(training_ids_growing)`
+
+Because precision depends on class prevalence, which equals the precision expected without skill, precision for exceptionally rare classes such as the simple class should be judged against prevalence, with values an order of magnitude or more above it indicating skill well above chance.
+
 
 ```{r}
 # Preparing Training Set
@@ -491,6 +550,9 @@ bind_rows(
     mutate(Set = "Test") %>%
     relocate(Set)
 ) %>%
+  left_join(
+    growing_prevalnce, by = "behavioral_class"
+  ) %>%
   mutate(
     behavioral_class = ordered(
       behavioral_class,
@@ -501,9 +563,10 @@ bind_rows(
   dplyr::select(-c(num_samples)) %>%
   kable(
     col.names = c("Set", "Class", "Precision", "Recall", "Specificity",
-                  "NPV"),
+                  "NPV", "Prevalence"),
     digits = 2,
-    align = "lccccc"
+    align = "lcccccc",
+    caption = "Prevalence is estimated across all gauged catchments."
   )
 ```
 
